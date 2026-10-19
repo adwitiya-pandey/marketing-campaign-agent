@@ -17,3 +17,20 @@
   2. `CostCeilingMiddleware` raises `BudgetExceeded` from `after_model`, cleanly propagating out of `agent.invoke`.
   3. `ChatGoogleGenerativeAI` constructs offline with dummy credentials.
 - Configured `tests/conftest.py` ensuring `LANGSMITH_TRACING=false` before test imports, and validated initial smoke tests.
+
+## T2: Domain Models, Settings Configuration, Structured Logging, and Trace Log
+- Implemented strict Pydantic v2 domain models in `src/campaign/models.py` (`extra="forbid"`):
+  - `ProductBrief`: strictly bounded inputs (name 2..80, description 10..2000, 4 valid segments, budget $100..$100,000).
+  - `CampaignAngle` & `CampaignAngles`: exactly 5 angles with case-insensitive distinct title validation and bounded evidence fields.
+  - Channel copy models (`GoogleAdsCopy`, `InstagramCopy`, `EmailCopy`) with character limits, headline/description counts, and strict hashtag regexes (`^#[A-Za-z0-9]{2,30}$`).
+  - Strict ASCII regex validation for `run_id` (`^RUN-[0-9]{8}-[0-9]{4}$`) and `user_id` (`^[A-Za-z][A-Za-z0-9_.-]{1,31}$`), strictly rejecting trailing newlines and non-ASCII/Unicode digits.
+- Built environment-backed configuration in `src/campaign/config.py` using `pydantic-settings`:
+  - `SecretStr` wrappers for API keys, guaranteeing secrets are never echoed in logs, `repr()`, `str()`, or dictionary serializations.
+  - Fail-fast validation requiring `GEMINI_API_KEY` when `LLM_MODE='gemini'`.
+- Structured JSON logging in `src/campaign/logging_setup.py`:
+  - Integrated `structlog` with contextvars for `run_id` and `phase`.
+  - Security filtering ensuring product briefs, raw customer rows, and API keys cannot be logged.
+- Append-only trace logging in `src/campaign/trace_log.py`:
+  - Thread-safe JSONL writer recording model steps (token usage, cost, content SHA-256) and tool calls (truncated arguments at 300 characters, execution latency, error codes).
+- Why `extra="forbid"` matters:
+  - Models often hallucinate unexpected parameters in tool arguments and JSON responses. `extra="forbid"` ensures any unexpected or hallucinated key fails schema validation immediately instead of being silently accepted, preventing unintended tool behavior and prompt injection payload smuggling.

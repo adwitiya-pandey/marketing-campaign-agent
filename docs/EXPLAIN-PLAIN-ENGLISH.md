@@ -225,3 +225,19 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - Features prominent warning that all costs are notional token calculations and free-tier runs bill $0.00.
 - Trace Summary Documentation (`docs/trace_summary.md`):
   - Generated comprehensive multi-run trace documentation joining persistent angle evidence with exact tool execution spans, input arguments, and run latencies.
+
+## T15: Production Documentation & Fresh Clone Verification
+- Root Documentation (`README.md`):
+  - Added CI status, Python 3.13, MIT license, and Ruff badges.
+  - Included ASCII architecture overview from SPEC 4.
+  - Transcribed exact testing capabilities and limitations from SPEC 15.
+  - Documented copy-paste quickstart commands and live Gemini execution procedures.
+  - Documented resource bounds (15 tool calls, $0.25 ceiling), security control mapping (S1–S11), measured costs ($0.0123/run), and known limitations (SPEC 20).
+- Technical Architecture Reference (`docs/architecture.md`):
+  - Outlined two-phase orchestration, human approval gate (S10), persistent SQLite state machine, shared allowance middleware, 3-layer read-only SQLite security model, and observability architecture.
+- Comprehensive Threat Model (`docs/threat_model.md`):
+  - Documented system assets, 5 security trust boundaries, threats T-01 through T-11 mapped to security controls S1 through S11, and residual risks.
+- Architectural Decision Log (`docs/decisions.md`):
+  - Documented decisions D1 through D10 from SPEC 19, including context, choices, alternatives rejected, rationale, and "what would change my mind" criteria.
+- Verification from Fresh Clone:
+  - Cloned the repository into a fresh temporary directory and ran quickstart commands end-to-end (`uv sync`, DB generation, scripted demo run, smoke tests), proving complete independence and reproducible setup.

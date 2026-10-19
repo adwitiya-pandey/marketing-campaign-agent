@@ -154,3 +154,15 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - At call 16: The 16th tool call is blocked by `ToolCallLimitMiddleware`, leaving executed calls at exactly 15 and setting status to `LIMIT_REACHED`.
   - At cost ceiling ($0.25): `BudgetExceeded` terminates invocation immediately, setting status to `BUDGET_EXCEEDED` while preserving existing run records.
   - Worst-case overshoot: Bounded by `max_output_tokens` (2,048 tokens @ $7.50/M = ~$0.015), ensuring notional cost cannot overshoot by more than ~1.5 cents.
+
+## T10: Service Orchestrator and Human Approval Gate (`service.py`)
+- Created `CampaignService` in `src/campaign/service.py`:
+  - `start_run`: Enforces rate limiting, sanitises product brief, sets contextvars (`run_id`, `phase='research'`), initiates Phase 1 agent, and stores `RunRecord` in `runs.db`.
+  - `approve_angle`: Human approval gate. Strictly validates that current status is `AWAITING_APPROVAL` and that the selected angle index is in `0..4`.
+  - Security S10: Reads the approved angle directly from persistent storage by index—never accepting angle copy from an untrusted UI payload.
+  - Passes remaining tool call allowance (`15 - used`) and remaining budget (`$0.25 - spent`) into Phase 2. If allowance is 0, terminates `LIMIT_REACHED` or `BUDGET_EXCEEDED` immediately without invoking the model.
+  - `reject_run`: Terminates the run cleanly to `REJECTED`.
+- State Machine Rules & Transition Checks:
+  - `start_run`: Initial state `AWAITING_APPROVAL` (or `LIMIT_REACHED`, `BUDGET_EXCEEDED`, `FAILED`).
+  - `approve_angle`: Allowed ONLY from `AWAITING_APPROVAL`. Transitions to `COMPLETED` (or bound failures). Re-approvals or transitions from completed/rejected runs raise `InvalidTransition`.
+  - `reject_run`: Allowed ONLY from `AWAITING_APPROVAL`. Transitions to `REJECTED`. Terminal states permit no further transitions.

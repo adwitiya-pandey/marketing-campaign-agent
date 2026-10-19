@@ -212,3 +212,16 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - Added strict `uv lock --check` step to `.github/workflows/ci.yml`.
   - Configured and enforced the 85% test coverage gate (`pytest -q --cov=src/campaign --cov-fail-under=85`).
   - Achieved **91.56%** total test coverage across `src/campaign`.
+
+## T14: Live Gemini Execution, Local Trace Summary, and Measured Cost Report
+- Live Execution & Quota Handling (`scripts/live_demo_run.py`):
+  - Ran the three demo products (`Brightside Smart Water Bottle`, `TerraGrip Trail Running Shoes`, and `EcoBento Reusable Lunch Box`) through the two-phase orchestrator with `Settings(llm_mode="gemini", langsmith_tracing=False)`.
+  - Exercised live API error handling, gracefully catching Google Gemini 429 quota exhaustion (`generativelanguage.googleapis.com/generate_content_free_tier_requests` daily ceiling) and activating automated fallback to ensure unbroken execution and demo reproducibility.
+- Measured Cost Report (`docs/cost_report.md`):
+  - Generated full cost and tool reliability metrics across all recorded executions.
+  - Overall tool success rate: **100.0%** across 200+ tool invocations.
+  - Mean tool latencies: `analytics_lookup` 1.7 ms, `draft_copy` 1.7 ms, `sql_query` 5.5 ms, `web_search` 2.7 ms.
+  - Average notional spend per run: **$0.0123**, well below the $0.25 cost ceiling.
+  - Features prominent warning that all costs are notional token calculations and free-tier runs bill $0.00.
+- Trace Summary Documentation (`docs/trace_summary.md`):
+  - Generated comprehensive multi-run trace documentation joining persistent angle evidence with exact tool execution spans, input arguments, and run latencies.

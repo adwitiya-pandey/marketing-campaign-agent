@@ -133,3 +133,24 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - Static AST analysis confirms zero write/mutation calls in `tools/`.
   - Confirmed `agent.py` and `tools/` never import `service.py` (strict human-gate separation).
   - Confirmed legacy `langchain_classic` and `AgentExecutor` are 100% absent across the codebase.
+
+## T9: Cost Ceiling, Middleware, Language Model Factory, and Two-Phase Agent
+- Cost Tracking (`src/campaign/cost.py`):
+  - `CostTracker`: Accumulates notional cost from token usage metadata based on configurable input ($1.50/M) and output ($7.50/M) pricing.
+  - `BudgetExceeded`: Exception raised when cumulative cost crosses the $0.25 ceiling.
+- Agent Middleware Pipeline (`src/campaign/middleware.py`):
+  - `ToolCallLimitMiddleware`: Bounded to remaining tool calls (`run_limit=15 - used`, `exit_behavior="end"`).
+  - `ModelCallLimitMiddleware`: Bounded to 20 model calls.
+  - `CostCeilingMiddleware`: Custom middleware raising `BudgetExceeded` from `after_model`.
+  - `TraceMiddleware`: Logs step-by-step metrics (tokens, tool call args, duration, SHA-256 digests) to `logs/agent_trace.jsonl`.
+- LLM Factory & Prompts (`src/campaign/llm.py`, `src/campaign/prompts.py`):
+  - Factory returning `ChatGoogleGenerativeAI` for live Gemini, `ScriptedChatModel` for offline demos, or `FakeToolModel` for tests.
+  - Strict system prompts emphasizing that tool outputs are data (never executable instructions).
+- Agent Construction & Repair Loop (`src/campaign/agent.py`):
+  - Built with modern `langchain.agents.create_agent` (no legacy `AgentExecutor`).
+  - Output validation: strictly validated with `CampaignAngles.model_validate_json` and `CampaignPackage.model_validate_json`.
+  - Exactly one repair attempt: if validation fails, sends the error description back to the model for correction; if still invalid, marks the run `FAILED`.
+- Call 16 and Cost Ceiling Dynamics:
+  - At call 16: The 16th tool call is blocked by `ToolCallLimitMiddleware`, leaving executed calls at exactly 15 and setting status to `LIMIT_REACHED`.
+  - At cost ceiling ($0.25): `BudgetExceeded` terminates invocation immediately, setting status to `BUDGET_EXCEEDED` while preserving existing run records.
+  - Worst-case overshoot: Bounded by `max_output_tokens` (2,048 tokens @ $7.50/M = ~$0.015), ensuring notional cost cannot overshoot by more than ~1.5 cents.

@@ -20,23 +20,24 @@ class FakeToolModel(GenericFakeChatModel):
 def get_chat_model(
     llm_mode: str | None = None,
     fake_messages: list[Any] | None = None,
+    settings: Any = None,
 ) -> Any:
     """Return configured chat model based on execution mode or fake messages."""
     if fake_messages is not None:
         return FakeToolModel(messages=iter(fake_messages))
 
-    settings = get_settings()
-    mode = llm_mode if llm_mode is not None else settings.llm_mode
+    cfg = settings if settings is not None else get_settings()
+    mode = llm_mode if llm_mode is not None else cfg.llm_mode
 
     if mode == "gemini":
-        key = settings.gemini_api_key.get_secret_value()
+        key = cfg.gemini_api_key.get_secret_value()
         return ChatGoogleGenerativeAI(
-            model=settings.gemini_model,
+            model=cfg.gemini_model,
             google_api_key=key,
             temperature=0,
             max_retries=2,
             timeout=60,
-            max_output_tokens=settings.max_output_tokens,
+            max_output_tokens=cfg.max_output_tokens,
         )
 
     if mode == "scripted":

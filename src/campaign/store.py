@@ -117,32 +117,38 @@ class RunStore:
             row = cursor.fetchone()
             if not row:
                 return None
+            return self._row_to_record(row)
 
-            product = ProductBrief.model_validate_json(row["product_json"])
-            angles = (
-                CampaignAngles.model_validate_json(row["angles_json"])
-                if row["angles_json"]
-                else None
-            )
-            package = (
-                CampaignPackage.model_validate_json(row["package_json"])
-                if row["package_json"]
-                else None
-            )
+    def _row_to_record(self, row: sqlite3.Row) -> RunRecord:
+        product = ProductBrief.model_validate_json(row["product_json"])
+        angles = (
+            CampaignAngles.model_validate_json(row["angles_json"]) if row["angles_json"] else None
+        )
+        package = (
+            CampaignPackage.model_validate_json(row["package_json"])
+            if row["package_json"]
+            else None
+        )
 
-            return RunRecord(
-                run_id=row["run_id"],
-                user_id=row["user_id"],
-                status=row["status"],
-                product=product,
-                angles=angles,
-                selected_index=row["selected_index"],
-                package=package,
-                tool_calls_used=row["tool_calls_used"],
-                cost_usd=row["cost_usd"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
+        return RunRecord(
+            run_id=row["run_id"],
+            user_id=row["user_id"],
+            status=row["status"],
+            product=product,
+            angles=angles,
+            selected_index=row["selected_index"],
+            package=package,
+            tool_calls_used=row["tool_calls_used"],
+            cost_usd=row["cost_usd"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def list_runs(self, limit: int = 100) -> list[RunRecord]:
+        """List recent runs ordered by creation time descending."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))
+            return [self._row_to_record(row) for row in cursor.fetchall()]
 
     def transition_run(
         self,

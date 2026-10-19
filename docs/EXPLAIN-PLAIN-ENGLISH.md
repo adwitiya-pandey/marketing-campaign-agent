@@ -166,3 +166,19 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - `start_run`: Initial state `AWAITING_APPROVAL` (or `LIMIT_REACHED`, `BUDGET_EXCEEDED`, `FAILED`).
   - `approve_angle`: Allowed ONLY from `AWAITING_APPROVAL`. Transitions to `COMPLETED` (or bound failures). Re-approvals or transitions from completed/rejected runs raise `InvalidTransition`.
   - `reject_run`: Allowed ONLY from `AWAITING_APPROVAL`. Transitions to `REJECTED`. Terminal states permit no further transitions.
+
+## T11: Scripted Demo Model, Demo Script, and Observability Reports
+- Deterministic Scripted Chat Model (`src/campaign/scripted.py`):
+  - Deterministic simulation of the full LLM agent loop for all 3 demo products (`smart water bottle`, `trail running shoes`, `reusable lunch box`).
+  - Emits real tool-calling sequences across Phase 1 (`web_search`, `sql_query`, `analytics_lookup`) and Phase 2 (`draft_copy` for Google Ads, Instagram, Email), verifying end-to-end tool interactions without external network dependencies.
+  - Implements realistic usage metadata and token counts for accurate cost and trace tracking.
+- End-to-End Demo Script (`scripts/demo_run.py`):
+  - Command-line runner orchestrating `CampaignService.start_run` and `approve_angle`.
+  - Outputs 5 structured angles and drafts the full multi-channel advertising package.
+- Explainability Utility (`scripts/explain_run.py`):
+  - Solves the observability curriculum requirement to "trace why the agent chose each angle".
+  - Joins persistent angles stored in `runs.db` with corresponding tool execution spans in `logs/agent_trace.jsonl`.
+  - Displays angle positioning, target insights, competitor contrast, and specific research evidence alongside executed tool calls and latencies.
+- Cost & Performance Reporting (`scripts/cost_report.py` & `docs/cost_report.md`):
+  - Aggregates per-run and overall tool reliability metrics (invocations, successes, errors, success rate, mean latency).
+  - Explicitly documents the notional cost caveat: tokens x pricing rates ($1.50/M input, $7.50/M output); free-tier Gemini and scripted demo bill $0.00.

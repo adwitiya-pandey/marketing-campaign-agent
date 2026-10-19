@@ -53,35 +53,67 @@ class CampaignService:
         self,
         store: RunStore | None = None,
         rate_limiter: RateLimiter | None = None,
+        settings: Any = None,
     ) -> None:
-        self.store = store if store is not None else RunStore()
+        self.settings = settings if settings is not None else get_settings()
+        self.store = store if store is not None else RunStore(db_path=self.settings.runs_db)
         self.rate_limiter = (
-            rate_limiter if rate_limiter is not None else RateLimiter(store=self.store)
+            rate_limiter
+            if rate_limiter is not None
+            else RateLimiter(
+                store=self.store,
+                max_runs=self.settings.rate_limit_runs,
+                window_s=self.settings.rate_limit_window_s,
+            )
         )
 
     def start_run(
         self,
-        user_id: str,
-        brief: ProductBrief,
+        user_id_or_brief: Any = None,
+        brief_or_user_id: Any = None,
         model: Any = None,
+        *,
+        user_id: str | None = None,
+        brief: ProductBrief | None = None,
     ) -> ServiceResult:
         """Start a new campaign run: rate limit -> sanitise -> Phase 1 agent."""
-        if not USER_ID_REGEX.fullmatch(user_id):
+        if brief is not None:
+            actual_brief = brief
+            actual_user_id = user_id or (
+                user_id_or_brief
+                if isinstance(user_id_or_brief, str)
+                else (brief_or_user_id if isinstance(brief_or_user_id, str) else "USR-default")
+            )
+        elif isinstance(user_id_or_brief, ProductBrief):
+            actual_brief = user_id_or_brief
+            actual_user_id = (
+                user_id
+                if user_id is not None
+                else (brief_or_user_id if isinstance(brief_or_user_id, str) else "USR-default")
+            )
+        else:
+            actual_user_id = user_id if user_id is not None else str(user_id_or_brief)
+            actual_brief = brief_or_user_id
+
+        if actual_brief is None:
+            raise ValueError("Product brief must be provided")
+
+        if not USER_ID_REGEX.fullmatch(actual_user_id):
             raise ValueError(
-                f"Invalid user_id '{user_id}': must match ^[A-Za-z][A-Za-z0-9_.-]{{1,31}}$"
+                f"Invalid user_id '{actual_user_id}': must match ^[A-Za-z][A-Za-z0-9_.-]{{1,31}}$"
             )
 
         # 1. Rate limiting check
-        allowed, wait_s = self.rate_limiter.check_allowed(user_id)
+        allowed, wait_s = self.rate_limiter.check_allowed(actual_user_id)
         if not allowed:
-            logger.info("run_rate_limited", user_id=user_id, wait_seconds=wait_s)
+            logger.info("run_rate_limited", user_id=actual_user_id, wait_seconds=wait_s)
             return ServiceResult(status="RATE_LIMITED", wait_seconds=wait_s)
 
         # 2. Sanitise brief (raises HostileInputError on injection)
-        clean_brief = sanitize_brief(brief)
+        clean_brief = sanitize_brief(actual_brief)
 
         # Consume rate limit slot
-        self.rate_limiter.record_run(user_id)
+        self.rate_limiter.record_run(actual_user_id)
 
         # 3. Initialize run identifiers and contextvars
         run_id = generate_run_id()
@@ -89,21 +121,21 @@ class CampaignService:
         current_phase.set("research")
 
         now_iso = datetime.now(UTC).isoformat()
-        chat_model = model if model is not None else get_chat_model()
+        chat_model = model if model is not None else get_chat_model(settings=self.settings)
 
         # 4. Execute Phase 1
-        settings = get_settings()
         p1 = run_phase1(
             brief=clean_brief,
             model=chat_model,
             run_id=run_id,
-            max_tool_calls=settings.max_tool_calls,
-            cost_ceiling_usd=settings.cost_ceiling_usd,
+            max_tool_calls=self.settings.max_tool_calls,
+            cost_ceiling_usd=self.settings.cost_ceiling_usd,
+            trace_file=self.settings.trace_log_path,
         )
 
         record = RunRecord(
             run_id=run_id,
-            user_id=user_id,
+            user_id=actual_user_id,
             status=p1.status,
             product=clean_brief,
             angles=p1.angles,
@@ -126,16 +158,25 @@ class CampaignService:
     def approve_angle(
         self,
         run_id: str,
-        index: int,
-        reviewer: str,
+        index: int | None = None,
+        reviewer: str | None = None,
+        *,
+        selected_index: int | None = None,
+        user_id: str | None = None,
         model: Any = None,
     ) -> ServiceResult:
         """Approve an angle by index: human gate -> Phase 2 drafting."""
-        if not USER_ID_REGEX.fullmatch(reviewer):
-            raise ValueError(f"Invalid reviewer ID '{reviewer}'")
+        actual_index = index if index is not None else selected_index
+        if actual_index is None:
+            raise ValueError("index or selected_index must be specified")
 
-        if index < 0 or index > 4:
-            raise IndexError(f"Angle index must be between 0 and 4, got {index}")
+        actual_reviewer = reviewer or user_id or "USR-reviewer"
+
+        if not USER_ID_REGEX.fullmatch(actual_reviewer):
+            raise ValueError(f"Invalid reviewer ID '{actual_reviewer}'")
+
+        if actual_index < 0 or actual_index > 4:
+            raise IndexError(f"Angle index must be between 0 and 4, got {actual_index}")
 
         run = self.store.get_run(run_id)
         if not run:
@@ -146,22 +187,21 @@ class CampaignService:
                 f"Cannot approve run in status '{run.status}'. Must be 'AWAITING_APPROVAL'"
             )
 
-        if not run.angles or len(run.angles.angles) <= index:
-            raise ValueError(f"Run {run_id} does not contain stored angle at index {index}")
+        if not run.angles or len(run.angles.angles) <= actual_index:
+            raise ValueError(f"Run {run_id} does not contain stored angle at index {actual_index}")
 
         # S10: Read approved angle from store, never take angle content from UI payload
-        approved_angle = run.angles.angles[index]
+        approved_angle = run.angles.angles[actual_index]
 
-        settings = get_settings()
-        remaining_tools = settings.max_tool_calls - run.tool_calls_used
-        remaining_cost = max(0.0, settings.cost_ceiling_usd - run.cost_usd)
+        remaining_tools = self.settings.max_tool_calls - run.tool_calls_used
+        remaining_cost = max(0.0, self.settings.cost_ceiling_usd - run.cost_usd)
 
         # Check remaining bounds before starting Phase 2
         if remaining_tools <= 0:
             updated = self.store.transition_run(
                 run_id,
                 "LIMIT_REACHED",
-                selected_index=index,
+                selected_index=actual_index,
             )
             return ServiceResult(status="LIMIT_REACHED", run=updated)
 
@@ -169,14 +209,14 @@ class CampaignService:
             updated = self.store.transition_run(
                 run_id,
                 "BUDGET_EXCEEDED",
-                selected_index=index,
+                selected_index=actual_index,
             )
             return ServiceResult(status="BUDGET_EXCEEDED", run=updated)
 
         current_run_id.set(run_id)
         current_phase.set("drafting")
 
-        chat_model = model if model is not None else get_chat_model()
+        chat_model = model if model is not None else get_chat_model(settings=self.settings)
         p2 = run_phase2(
             brief=run.product,
             approved_angle=approved_angle,
@@ -185,6 +225,7 @@ class CampaignService:
             remaining_tool_calls=remaining_tools,
             remaining_cost_usd=remaining_cost,
             prior_cost_usd=run.cost_usd,
+            trace_file=self.settings.trace_log_path,
         )
 
         updated_tools = run.tool_calls_used + p2.tool_calls_used
@@ -193,7 +234,7 @@ class CampaignService:
         updated_run = self.store.transition_run(
             run_id,
             p2.status,
-            selected_index=index,
+            selected_index=actual_index,
             package=p2.package,
             tool_calls_used=updated_tools,
             cost_usd=updated_cost,

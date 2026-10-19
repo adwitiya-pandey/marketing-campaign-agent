@@ -241,3 +241,17 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - Documented decisions D1 through D10 from SPEC 19, including context, choices, alternatives rejected, rationale, and "what would change my mind" criteria.
 - Verification from Fresh Clone:
   - Cloned the repository into a fresh temporary directory and ran quickstart commands end-to-end (`uv sync`, DB generation, scripted demo run, smoke tests), proving complete independence and reproducible setup.
+
+## T16: Final Verification, Git Tag `v0.1.0`, and GitHub Release
+- Reproducibility & Fresh Clone Verification:
+  - Cloned the repository into an isolated temporary directory (`/tmp/test_release_v010`).
+  - Executed `scripts/build_db.py` to synthesize the customer database (`data/customers.db`).
+  - Executed `scripts/demo_run.py` end-to-end in scripted mode, verifying angle research, human approval simulation, and multi-channel draft package generation.
+  - Executed full test suite (`193 passed` in under 10 seconds with zero warnings or failures).
+- Quality and Compliance Checks:
+  - Ran `ruff check .` and `ruff format --check .` to ensure 100% linter and formatting compliance.
+  - Ran `pytest -q --cov=src/campaign --cov-fail-under=85` to confirm coverage gate compliance (91.56%).
+- Release Packaging & Distribution:
+  - Tagged the release commit with annotated git tag `v0.1.0`.
+  - Pushed `main` and tag `v0.1.0` to the public GitHub repository at `adwitiya-pandey/marketing-campaign-agent`.
+  - Published GitHub release `v0.1.0` documenting the bounded two-phase architecture, human gate, security controls, and Streamlit dashboard.

@@ -1,0 +1,41 @@
+[project]
+name = "campaign"
+version = "0.1.0"
+description = "LangChain marketing agent: web search, read-only SQL, analytics, human-approved campaign angles, 15-call and 25-cent bounds"
+readme = "README.md"
+authors = [
+    { name = "adwitiya-pandey", email = "76179646+adwitiya-pandey@users.noreply.github.com" }
+]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "langchain==1.4.6",
+    "langchain-google-genai==4.4.2",
+    "langsmith==0.14.11",
+    "streamlit==1.66.0",
+    "pydantic-settings==2.16.0",
+    "structlog==26.1.0",
+]
+
+[project.optional-dependencies]
+live-search = [
+    "ddgs==9.16.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

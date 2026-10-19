@@ -5,8 +5,13 @@ Pre-filled on 17 and 18 Oct 2026 by running langchain 1.4.6, langchain-core 1.6.
 ## Verified imports
 ```python
 from langchain.agents import create_agent
-from langchain.agents.middleware import (AgentMiddleware, ToolCallLimitMiddleware,
-                                         ModelCallLimitMiddleware, ModelRetryMiddleware, ToolRetryMiddleware)
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ToolCallLimitMiddleware,
+    ModelCallLimitMiddleware,
+    ModelRetryMiddleware,
+    ToolRetryMiddleware,
+)
 from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -40,6 +45,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 ## Probe (re-run; `uv run python -I probe.py` from a scratch folder, not committed)
 ```python
 import os
+
 os.environ["LANGSMITH_TRACING"] = "false"
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
@@ -49,36 +55,53 @@ from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
+
 class Args(BaseModel):
     query: str = Field(min_length=3, max_length=200)
+
 
 @tool(args_schema=Args)
 def search(query: str) -> str:
     """Search the web."""
     return "result for " + query
 
+
 class FakeToolModel(GenericFakeChatModel):
     def bind_tools(self, tools, **kw):
         return self
 
+
 USAGE = {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100}
 
+
 def script(n):
-    msgs = [AIMessage(content="", tool_calls=[{"name": "search", "args": {"query": f"query {i}"}, "id": f"c{i}"}],
-                      usage_metadata=USAGE) for i in range(n)]
+    msgs = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "search", "args": {"query": f"query {i}"}, "id": f"c{i}"}],
+            usage_metadata=USAGE,
+        )
+        for i in range(n)
+    ]
     msgs.append(AIMessage(content="done", usage_metadata=USAGE))
     return iter(msgs)
 
+
 # 1) tool limit: run_limit=2, model wants 5
-agent = create_agent(model=FakeToolModel(messages=script(5)), tools=[search],
-                     middleware=[ToolCallLimitMiddleware(run_limit=2, exit_behavior="end")])
+agent = create_agent(
+    model=FakeToolModel(messages=script(5)),
+    tools=[search],
+    middleware=[ToolCallLimitMiddleware(run_limit=2, exit_behavior="end")],
+)
 r = agent.invoke({"messages": [HumanMessage("go")]}, config={"recursion_limit": 30})
 tool_msgs = [m for m in r["messages"] if m.type == "tool"]
 print("tool messages:", len(tool_msgs), "| last:", repr(r["messages"][-1].content)[:70])
 
+
 # 2) cost ceiling raised from after_model propagates out of invoke
 class BudgetExceeded(Exception):
     pass
+
 
 class Cost(AgentMiddleware):
     def __init__(self, ceiling):
@@ -93,6 +116,7 @@ class Cost(AgentMiddleware):
             raise BudgetExceeded(f"{self.spent:.4f}")
         return None
 
+
 c = Cost(0.0025)
 agent2 = create_agent(model=FakeToolModel(messages=script(5)), tools=[search], middleware=[c])
 try:
@@ -101,7 +125,14 @@ except BudgetExceeded:
     print("BudgetExceeded propagated after", c.calls, "model calls")
 
 # 3) Gemini model constructs offline; tool schema keys
-m = ChatGoogleGenerativeAI(model="gemini-3.8-flash", google_api_key="dummy", temperature=0, max_retries=2)
-print("gemini:", type(m).__name__, "| tool args:", list(search.args_schema.model_json_schema()["properties"]))
+m = ChatGoogleGenerativeAI(
+    model="gemini-3.8-flash", google_api_key="dummy", temperature=0, max_retries=2
+)
+print(
+    "gemini:",
+    type(m).__name__,
+    "| tool args:",
+    list(search.args_schema.model_json_schema()["properties"]),
+)
 ```
 Expected output: `tool messages: 3 | last: 'Tool call limit reached: run limit exceeded (3/2 calls).'`; `BudgetExceeded propagated after 2 model calls`; `gemini: ChatGoogleGenerativeAI | tool args: ['query']`.

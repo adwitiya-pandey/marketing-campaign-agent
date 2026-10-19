@@ -81,3 +81,14 @@
 - Why a flagged brief is rejected but a flagged web result is only wrapped:
   - The brief is submitted by internal staff: if hostile, failing closed immediately prevents unauthorized operation and saves token budget.
   - Web search results are external third-party content. If the agent aborted whenever a public website contained injection text, attackers could trivially DoS the marketing agent. Wrapping in `<untrusted>` tags allows the model to process competitor data safely as inert text rather than instructions.
+
+## T6: Hostile SQL Test Suite, Validator Stub, and Sliding-Window Rate Limiter
+- Created exhaustive SQL safety test suite in `tests/test_sqlsafe.py`:
+  - 44 hostile attack vectors spanning stacked queries, semicolons in literals, comments (`--` and `/* */`), non-SELECT verbs (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`), denylisted functions (`ATTACH`, `DETACH`, `PRAGMA`, `LOAD_EXTENSION`), table functions (`pragma_`), system schemas (`sqlite_master`, `sqlite_sequence`), CTE recursion (`WITH`), tables outside allowlist, subqueries, non-ASCII/Unicode homoglyphs, zero-width characters, bounds/lengths, and limit manipulations.
+  - 11 benign cases verifying standard business queries (aggregates, joins, group by, order by, limit rewrite, missing limit append).
+  - Explicit bypass test proving that even if `validate()` is skipped, the underlying read-only database connection still refuses writes (S2).
+- Defined `sqlsafe.py` interface and `SqlRejected` exception with `NotImplementedError` stub.
+- Implemented persistent sliding-window rate limiter in `src/campaign/ratelimit.py`:
+  - Injected clock mechanism for deterministic testing without sleeping.
+  - Backed by `rate_events` table in SQLite (`runs.db`), ensuring rate limits survive server crashes and restarts.
+  - Computes remaining wait time until rolling window expiry.

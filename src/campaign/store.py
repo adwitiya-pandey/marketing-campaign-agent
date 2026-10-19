@@ -214,6 +214,16 @@ class RunStore:
             )
             return cursor.fetchone()[0]
 
+    def get_oldest_rate_event_ts(self, user_id: str, window_start_ts: float) -> float | None:
+        """Get timestamp of oldest active rate event in rolling window."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT MIN(ts) FROM rate_events WHERE user_id = ? AND ts >= ?",
+                (user_id, window_start_ts),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+
     def clean_old_rate_events(self, cutoff_ts: float) -> None:
         """Clean rate events older than cutoff timestamp."""
         with self._get_connection() as conn:

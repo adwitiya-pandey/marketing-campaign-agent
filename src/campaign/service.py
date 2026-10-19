@@ -249,10 +249,17 @@ class CampaignService:
         )
         return ServiceResult(status=p2.status, run=updated_run)
 
-    def reject_run(self, run_id: str, reviewer: str) -> ServiceResult:
+    def reject_run(
+        self,
+        run_id: str,
+        reviewer: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> ServiceResult:
         """Reject all proposed angles and terminate run."""
-        if not USER_ID_REGEX.fullmatch(reviewer):
-            raise ValueError(f"Invalid reviewer ID '{reviewer}'")
+        actual_reviewer = reviewer or user_id or "USR-reviewer"
+        if not USER_ID_REGEX.fullmatch(actual_reviewer):
+            raise ValueError(f"Invalid reviewer ID '{actual_reviewer}'")
 
         run = self.store.get_run(run_id)
         if not run:

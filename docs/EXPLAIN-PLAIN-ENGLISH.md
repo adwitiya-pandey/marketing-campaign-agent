@@ -182,3 +182,21 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
 - Cost & Performance Reporting (`scripts/cost_report.py` & `docs/cost_report.md`):
   - Aggregates per-run and overall tool reliability metrics (invocations, successes, errors, success rate, mean latency).
   - Explicitly documents the notional cost caveat: tokens x pricing rates ($1.50/M input, $7.50/M output); free-tier Gemini and scripted demo bill $0.00.
+
+## T12: Streamlit Human-in-the-Loop Dashboard (`app.py`)
+- User Interface & Execution Modes (`src/campaign/app.py`):
+  - Sidebar with typed user ID input and execution mode banner (`SCRIPTED DEMO: outputs are deterministic, not Gemini` in scripted mode).
+  - Product brief submission form validating inputs through Pydantic `ProductBrief` before touching any agent components.
+- Human Gate & Angle Approval:
+  - Phase 1 research presents 5 candidate angle cards displaying positioning, key messages, estimated reach, and grounded research evidence.
+  - Manager selection radio and dual controls: "Approve and draft package" (transitions to Phase 2) or "Reject" (terminates run cleanly).
+  - Security S10: Approved angle is retrieved exclusively from persistent storage by index—never accepting raw text from UI inputs.
+- Multi-Channel Advertising Package Display:
+  - Tabbed interface separating Google Ads, Instagram, and Email deliverables.
+  - Live character counters for every channel field against platform limits (headlines <= 30 chars, descriptions <= 90 chars, Instagram captions <= 2,200 chars, email subjects <= 60 chars, bodies <= 1,200 chars).
+- Real-time Observability & Safety:
+  - Sidebar telemetry tracking status, tool calls used out of 15, notional cost out of $0.25 (with required caveat), and tool success rates.
+  - Trace telemetry expander displaying detailed model token steps and tool invocation latencies.
+  - Strict plain text rendering (`st.text`) across all dynamic model, tool, and database outputs, preventing cross-site scripting (XSS) and raw HTML execution.
+- Testing with `AppTest` (`tests/test_app.py`):
+  - Verifies mode banner, 5 angle generation, approval flow, rejection termination, prompt injection defense, and rate-limiting alerts.

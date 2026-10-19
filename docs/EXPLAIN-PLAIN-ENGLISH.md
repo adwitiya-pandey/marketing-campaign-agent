@@ -117,3 +117,19 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
 
 > [!NOTE]
 > The regex validator is an application-level filter. The true security boundary remains the read-only SQLite connection (`mode=ro`, `PRAGMA query_only=ON`, and the bytecode authorizer), verified by test bypass.
+
+## T8: Agent Tools and Search Backends
+- Search Backends (`src/campaign/search_backends.py`):
+  - `FixtureSearch`: Deterministic offline backend loading `data/fixtures/search.json` with multi-token keyword overlap matching.
+  - `DdgsSearch`: Optional live search backend using DuckDuckGo (`ddgs`), loaded lazily only when requested.
+- Four Pydantic-Schema LangChain Tools (`src/campaign/tools/`):
+  - `web_search`: Wraps snippets in `<untrusted>` tags and flags adversarial prompt injection fixtures. Returns up to 5 results as JSON strings.
+  - `sql_query`: Enforces `sqlsafe.validate` prior to database execution. Rejected queries log to `audit/sql_audit.jsonl` with error codes and return friendly `REJECTED: <code>` JSON messages. Caps results at 50 rows.
+  - `analytics_lookup`: Estimates deterministic audience reach from segment, channel, and budget.
+  - `draft_copy`: Validates channel-specific advertising copy constraints (`GoogleAdsCopy`, `InstagramCopy`, `EmailCopy`) and compliance guidelines. Strictly side-effect free.
+- Error Isolation:
+  - Configured `handle_validation_error` and `handle_tool_error` handlers returning formatted JSON strings (`INVALID_ARG: ...`), preventing unhandled agent crashes.
+- AST Architecture Boundaries (`tests/test_boundaries.py`):
+  - Static AST analysis confirms zero write/mutation calls in `tools/`.
+  - Confirmed `agent.py` and `tools/` never import `service.py` (strict human-gate separation).
+  - Confirmed legacy `langchain_classic` and `AgentExecutor` are 100% absent across the codebase.

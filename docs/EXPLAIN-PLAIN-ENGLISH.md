@@ -92,3 +92,28 @@
   - Injected clock mechanism for deterministic testing without sleeping.
   - Backed by `rate_events` table in SQLite (`runs.db`), ensuring rate limits survive server crashes and restarts.
   - Computes remaining wait time until rolling window expiry.
+
+## T7: Seven-Rule SELECT-Only SQL Validator (`sqlsafe.py`)
+Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous defense-in-depth rules before queries ever touch SQLite:
+1. **Rule 1 (Length and Character Encoding)**:
+   - Query length must be between 10 and 500 characters.
+   - Restricts characters strictly to ASCII printable (`0x20` to `0x7E`) plus standard whitespace (`\t`, `\n`, `\r`). Rejects null bytes, vertical tabs, Unicode homoglyphs (e.g. Cyrillic `с`), and zero-width spaces (`\u200b`).
+2. **Rule 2 (No Stacked Statements / Semicolon Ban)**:
+   - Strips at most one trailing semicolon. Rejects any other semicolon anywhere in the query (including within string literals), completely preventing stacked query injection (e.g. `SELECT ...; DROP TABLE ...`).
+3. **Rule 3 (Strict Comment Ban)**:
+   - Disallows `--` and `/* ... */` comment markers anywhere in the query string to prevent comment-based query truncation or payload hiding.
+4. **Rule 4 (SELECT-Only Root and No CTEs)**:
+   - Requires the query to begin with `SELECT` (`^\s*SELECT\b`).
+   - Disallows Common Table Expressions (`WITH` and `WITH RECURSIVE`) to prevent recursive execution loops.
+   - Forbids `SELECT ... INTO` statements.
+5. **Rule 5 (Keyword and Schema Denylist)**:
+   - Rejects whole-word denylisted verbs and functions: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `REPLACE`, `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM`, `REINDEX`, `ANALYZE`, `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `TRIGGER`, `LOAD_EXTENSION`.
+   - Rejects all access to SQLite internals via `sqlite_` and `pragma_` table/view/function prefixes.
+6. **Rule 6 (Strict Table Allowlist)**:
+   - Every table identifier referenced after `FROM` or any `JOIN` (including subqueries and comma-separated joins) must belong to the strict allowlist: `{"segments", "customers", "purchases"}`. Unlisted tables or system tables trigger immediate rejection.
+7. **Rule 7 (Automated LIMIT Enforcement & Rewrite)**:
+   - If `LIMIT` is absent, appends `LIMIT 50`.
+   - If `LIMIT` is present, validates that the limit is an unsigned integer > 0 (rejecting floats, negative integers, or injection strings). If the requested limit exceeds 50, automatically rewrites it to 50.
+
+> [!NOTE]
+> The regex validator is an application-level filter. The true security boundary remains the read-only SQLite connection (`mode=ro`, `PRAGMA query_only=ON`, and the bytecode authorizer), verified by test bypass.

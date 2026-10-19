@@ -64,3 +64,20 @@
 - Dual-Layer SQL Injection Defense:
   - Domain layer: Pydantic regex validator rejects invalid or adversarial `user_id` inputs before SQL compilation.
   - Database layer: 100% parameterised queries (`?` bindings) treat all dynamic values as literal parameters.
+
+## T5: Input Sanitization, Advertising Compliance, and Mock Analytics
+- Sanitization & Injection Defense (`src/campaign/sanitize.py`):
+  - Strips zero-width characters (`\u200b`, `\u200c`, `\u200d`, `\ufeff`) and control characters while preserving formatting whitespace (`\n`, `\t`, `\r`).
+  - Implemented prompt injection detector checking for instructions like `ignore previous instructions`, `developer mode`, `system override`, `output hacked`, etc.
+  - `wrap_untrusted`: Escapes internal `<untrusted>` tags and securely delimits untrusted web content.
+  - Fail-closed brief rejection (`HostileInputError`) for malicious staff submissions.
+- Advertising Copy Compliance (`src/campaign/compliance.py`):
+  - Enforces word-boundary checks against banned advertising terms (`guaranteed`, `100% safe`, `cure`, `miracle`, `risk-free`, `#1 in the world`) to prevent false positives on substrings (e.g. `secure`).
+  - Enforces the `% off` rule: rejects unauthorized discount claims unless explicitly authorized in the product brief.
+- Deterministic Mock Analytics (`src/campaign/analytics.py`):
+  - Formula: `reach = round(base[segment] * rate[channel] * min(1.0, budget_usd / 5000) ** 0.5)`.
+  - Documented base constants (Fitness: 50k, Professionals: 45k, Families: 35k, Students: 40k) and channel multipliers (Instagram: 1.2, Google Ads: 1.0, Email: 0.8).
+  - Verified monotonicity with budget and bounds validation ($50 to $100,000).
+- Why a flagged brief is rejected but a flagged web result is only wrapped:
+  - The brief is submitted by internal staff: if hostile, failing closed immediately prevents unauthorized operation and saves token budget.
+  - Web search results are external third-party content. If the agent aborted whenever a public website contained injection text, attackers could trivially DoS the marketing agent. Wrapping in `<untrusted>` tags allows the model to process competitor data safely as inert text rather than instructions.

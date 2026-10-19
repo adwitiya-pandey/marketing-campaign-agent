@@ -24,6 +24,7 @@ from campaign.models import (
 from campaign.prompts import PHASE1_SYSTEM_PROMPT, PHASE2_SYSTEM_PROMPT, REPAIR_PROMPT
 from campaign.tools import analytics_lookup, draft_copy, sql_query, web_search
 from campaign.trace_log import TraceLogger
+from campaign.tracing import get_invoke_config
 
 
 @dataclass
@@ -136,10 +137,13 @@ def run_phase1(
         f"Target Segment: {brief.segment}\nBudget USD: {brief.budget_usd}\n</product>"
     )
 
+    invoke_config = get_invoke_config(
+        run_id=run_id, phase="research", run_name="campaign-phase1-research"
+    )
+    invoke_config["recursion_limit"] = 30
+
     try:
-        response = agent.invoke(
-            {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 30}
-        )
+        response = agent.invoke({"messages": [HumanMessage(content=prompt)]}, config=invoke_config)
     except BudgetExceeded:
         return Phase1Result(
             status="BUDGET_EXCEEDED",
@@ -177,9 +181,12 @@ def run_phase1(
     except (ValidationError, ValueError) as err:
         # Repair attempt: 1 extra model call
         repair_prompt = REPAIR_PROMPT.format(error=str(err))
+        repair_config = get_invoke_config(
+            run_id=run_id, phase="research-repair", run_name="campaign-phase1-repair"
+        )
         try:
             history = list(messages) + [HumanMessage(content=repair_prompt)]
-            repair_reply = model.invoke(history)
+            repair_reply = model.invoke(history, config=repair_config)
             usage = getattr(repair_reply, "usage_metadata", {}) or {}
             cost_tracker.add_tokens(usage.get("input_tokens", 0), usage.get("output_tokens", 0))
 
@@ -263,10 +270,13 @@ def run_phase2(
         f"Estimated Reach: {approved_angle.estimated_reach}\n</approved_angle>"
     )
 
+    invoke_config = get_invoke_config(
+        run_id=run_id, phase="drafting", run_name="campaign-phase2-drafting"
+    )
+    invoke_config["recursion_limit"] = 30
+
     try:
-        response = agent.invoke(
-            {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 30}
-        )
+        response = agent.invoke({"messages": [HumanMessage(content=prompt)]}, config=invoke_config)
     except BudgetExceeded:
         return Phase2Result(
             status="BUDGET_EXCEEDED",
@@ -304,9 +314,12 @@ def run_phase2(
     except (ValidationError, ValueError) as err:
         # Repair attempt: 1 extra model call
         repair_prompt = REPAIR_PROMPT.format(error=str(err))
+        repair_config = get_invoke_config(
+            run_id=run_id, phase="drafting-repair", run_name="campaign-phase2-repair"
+        )
         try:
             history = list(messages) + [HumanMessage(content=repair_prompt)]
-            repair_reply = model.invoke(history)
+            repair_reply = model.invoke(history, config=repair_config)
             usage = getattr(repair_reply, "usage_metadata", {}) or {}
             cost_tracker.add_tokens(usage.get("input_tokens", 0), usage.get("output_tokens", 0))
 

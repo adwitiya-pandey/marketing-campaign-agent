@@ -200,3 +200,15 @@ Implemented `sqlsafe.validate(sql: str) -> ValidatedSql` enforcing 7 rigorous de
   - Strict plain text rendering (`st.text`) across all dynamic model, tool, and database outputs, preventing cross-site scripting (XSS) and raw HTML execution.
 - Testing with `AppTest` (`tests/test_app.py`):
   - Verifies mode banner, 5 angle generation, approval flow, rejection termination, prompt injection defense, and rate-limiting alerts.
+
+## T13: Tracing Configuration, Observability Metadata, and CI Hardening
+- Tracing Validation & Metadata Pipeline (`src/campaign/tracing.py`):
+  - `validate_tracing_settings`: Validates LangSmith configuration, asserting that if `LANGSMITH_TRACING=true`, a non-empty `LANGSMITH_API_KEY` is present; raises a clean `ValueError` otherwise.
+  - Automatically ensures external tracing remains strictly disabled in test environments (`LANGSMITH_TRACING=false`), preventing unexpected external HTTP calls.
+  - `get_invoke_config`: Constructs structured LangChain `RunnableConfig` dictionaries (`run_name`, `tags=["campaign-agent", phase]`, `metadata={"run_id": ..., "phase": ...}`), attached directly to `agent.invoke` calls across research, drafting, and repair cycles.
+- SDK Notes Documentation (`docs/sdk_notes.md`):
+  - Recorded official LangSmith documentation links for LangChain agents (`https://docs.smith.langchain.com/observability/how_to_guides/trace_with_langchain`).
+- CI Hardening & Coverage Gate:
+  - Added strict `uv lock --check` step to `.github/workflows/ci.yml`.
+  - Configured and enforced the 85% test coverage gate (`pytest -q --cov=src/campaign --cov-fail-under=85`).
+  - Achieved **91.56%** total test coverage across `src/campaign`.

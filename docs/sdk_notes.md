@@ -31,7 +31,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 | Tool schemas | `@tool(args_schema=PydanticModel)` works; `tool.args_schema.model_json_schema()["properties"]` lists the fields. |
 | Gemini model | `ChatGoogleGenerativeAI(model="gemini-3.8-flash", google_api_key="dummy", temperature=0, max_retries=2)` constructs offline. Verified fields include `model`, `google_api_key`, `temperature`, `max_output_tokens`, `max_retries`, `timeout`, `thinking_budget`. `gemini-3.8-flash` is listed Stable on the official Gemini models page (17 Oct 2026). |
 | Callbacks | `BaseCallbackHandler` has `on_llm_end`, `on_tool_start`, `on_tool_end`, `on_tool_error`, `on_chat_model_start`. |
-| LangSmith | `langsmith.utils.tracing_is_enabled()` returns `False` when `LANGSMITH_TRACING=false`. |
+| LangSmith | `langsmith.utils.tracing_is_enabled()` returns `False` when `LANGSMITH_TRACING=false`. Official docs: `https://docs.smith.langchain.com/observability/how_to_guides/trace_with_langchain` and `https://docs.smith.langchain.com/legacy/tracing/faq/langchain_specific_guides`. RunnableConfig metadata (`run_name`, `tags`, `metadata`) cleanly attaches to `agent.invoke` without network calls. |
 | Streamlit tests | `from streamlit.testing.v1 import AppTest`; `AppTest.from_file(path)` exists. |
 
 ## Not verified (decide with evidence, record in `docs/decisions.md` or `docs/open_questions.md`)

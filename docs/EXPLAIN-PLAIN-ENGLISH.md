@@ -52,3 +52,15 @@
 - Fail-Closed SQL Audit Logger:
   - Appends audit events to `audit/sql_audit.jsonl` with timestamp, run ID, acceptance status, error code, and SQL text (capped at 500 characters).
   - Strictly omits result rows and customer data; any file I/O failure raises an exception to fail closed.
+
+## T4: Run State Machine and Persistent Storage Layer
+- Created `src/campaign/store.py` backed by SQLite (`runs.db`):
+  - `runs` table storing full JSON representations of product brief, angles, and advertising package, alongside execution counters (`tool_calls_used`, `cost_usd`).
+  - `rate_events` table indexed by `(user_id, ts)` for persistent sliding-window rate limiting surviving process restarts.
+- Strict State Machine Transitions:
+  - Phase 1 initializes runs into `AWAITING_APPROVAL` (or terminal failure: `LIMIT_REACHED`, `BUDGET_EXCEEDED`, `FAILED`).
+  - Human review transitions from `AWAITING_APPROVAL` exclusively to `COMPLETED` (with selected angle index and drafted package), `REJECTED`, or phase 2 bound failures.
+  - Re-approving or transitioning out of terminal states raises `InvalidTransition`.
+- Dual-Layer SQL Injection Defense:
+  - Domain layer: Pydantic regex validator rejects invalid or adversarial `user_id` inputs before SQL compilation.
+  - Database layer: 100% parameterised queries (`?` bindings) treat all dynamic values as literal parameters.

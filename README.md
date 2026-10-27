@@ -35,6 +35,21 @@
 
 ---
 
+## Where LangChain is used
+
+| Concept | File and Function / Class | Exact Import | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Agent Factory** | `src/campaign/agent.py`<br>`build_agent` | `from langchain.agents import create_agent` | Wraps LangChain 1.4 `create_agent` with model, tools, system prompt, and middleware. |
+| **Middleware (Limits)** | `src/campaign/agent.py`<br>`run_phase1`, `run_phase2` | `from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware` | Caps tool calls (15 max across run) and bounds model iteration steps. |
+| **Middleware (Hooks)** | `src/campaign/middleware.py`<br>`CostCeilingMiddleware`, `TraceMiddleware` | `from langchain.agents.middleware import AgentMiddleware`<br>`from langchain_core.messages import AIMessage` | Subclasses `after_model` to enforce $0.25 cost ceiling and log JSONL traces. |
+| **Tools** | `src/campaign/tools/web_search.py` (`web_search`)<br>`src/campaign/tools/sql_query.py` (`sql_query`)<br>`src/campaign/tools/analytics_lookup.py` (`analytics_lookup`)<br>`src/campaign/tools/draft_copy.py` (`draft_copy`) | `from langchain_core.tools import tool` | Binds safe execution functions to Pydantic argument schemas (`args_schema`). |
+| **Chat Model (Live)** | `src/campaign/llm.py`<br>`get_chat_model` | `from langchain_google_genai import ChatGoogleGenerativeAI` | Configures Google Gemini 3.8 Flash with temperature=0, retries, and output token caps. |
+| **Chat Model (Offline / Test)** | `src/campaign/llm.py` (`FakeToolModel`)<br>`src/campaign/scripted.py` (`ScriptedChatModel`) | `from langchain_core.language_models.fake_chat_models import GenericFakeChatModel`<br>`from langchain_core.language_models.chat_models import BaseChatModel` | Provides deterministic offline testing and scripted demo chat models with tool binding. |
+| **Messages** | `src/campaign/agent.py`<br>`run_phase1`, `run_phase2` | `from langchain_core.messages import HumanMessage` | Formats input user prompts passed to `agent.invoke({"messages": [...]})`. |
+| **Tracing** | `src/campaign/tracing.py`<br>`validate_tracing_settings`, `get_invoke_config` | Native LangChain env vars & `RunnableConfig` dict (`tags`, `metadata`, `run_name`) | Configures LangSmith tracing environment and attaches metadata to agent invocations. |
+
+---
+
 ## What the Tests Prove and Do Not
 
 > All tests offline, no key, no network. Fake model: `FakeToolModel(GenericFakeChatModel)` with `bind_tools` returning `self` (verified pattern in `docs/sdk_notes.md`), fed an iterator of `AIMessage` objects with `tool_calls` and `usage_metadata`. The **scripted demo model** in `scripted.py` builds, for the three demo products, the exact tool-call sequence and the final JSON; it proves wiring, schemas, bounds, gate, logging; it does **not** prove that Gemini picks good tools or writes good copy. T14 (live) covers that.

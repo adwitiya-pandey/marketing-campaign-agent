@@ -322,6 +322,8 @@ Both execution phases share a single resource budget:
 
 > [!NOTE]
 > **Notional Cost Caveat**: All costs are notional estimates calculated from configured token rates (SPEC section 10: $1.50/1M input tokens, $7.50/1M output tokens). Google Gemini free tier and scripted demo runs bill $0.00. No actual charges were incurred.
+>
+> **Historical Benchmark Snapshot (Recorded on 2026-10-19 / T14)**: The metrics below represent an immutable snapshot of 31 runs executed during the T14 benchmark cycle. Because `scripts/cost_report.py` dynamically aggregates all runs stored in `data/runs.db` and `logs/agent_trace.jsonl`, executing `uv run python scripts/cost_report.py` in an active workspace will calculate fresh metrics reflecting all subsequent runs.
 
 - **Total Recorded Runs**: 31
 - **Completed Runs**: 22

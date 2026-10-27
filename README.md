@@ -11,26 +11,68 @@
 
 ## Architecture Diagram
 
-```
-                      Streamlit dashboard (app.py)
-                 user id · product form · 5 angle cards · approve/reject · package · cost · trace
-                                   │ service.py (the only orchestrator)
-        ┌──────────────────────────┼──────────────────────────────┐
-        ▼                          ▼                              ▼
-  ratelimit.py              store.py (runs.db)             trace_log.py (JSONL)
-  sanitize.py               run state machine              every tool call + model step
-        │
-        ▼ PHASE 1                                           PHASE 2 (only after approve_angle)
-  create_agent(model, tools, middleware)                     create_agent(model, tools, middleware)
-    middleware: ToolCallLimit(15 − used) · ModelCallLimit · CostCeiling(0.25 − spent) · Trace
-    tools: web_search  sql_query  analytics_lookup           tools: draft_copy  analytics_lookup
-        │                                                          │
-        ▼                                                          ▼
-  final message ─► CampaignAngles (Pydantic, exactly 5)      final message ─► CampaignPackage (Pydantic)
+```mermaid
+flowchart TD
+    subgraph UI ["User Interface"]
+        APP["Streamlit Dashboard (app.py)<br/>• Product Brief Form<br/>• 5 Proposed Angle Cards<br/>• Human Gate: Approve or Reject<br/>• Copy Review & Telemetry Inspector"]
+    end
 
- tools ──► search_backends (fixture | ddgs)   sqlsafe.py ─► db.py (customers.db, mode=ro + query_only + authorizer)
- every SQL string ──► audit/sql_audit.jsonl (accepted or rejected, reason, no row data)
- LangSmith: automatic LangChain tracing when LANGSMITH_TRACING=true
+    subgraph ServiceLayer ["Service Orchestrator (service.py)"]
+        SRV["CampaignService<br/>• Two-Phase Orchestration & State Machine<br/>• Enforces Sequential Gate & Bound Hand-off"]
+        RATE["RateLimiter (ratelimit.py)<br/>• Sliding-window SQLite rate_events"]
+        SAN["Input Sanitizer (sanitize.py)<br/>• Strip Control Chars & Zero-Width<br/>• Prompt Injection Scanner"]
+        STORE[("RunStore (store.py)<br/>• SQLite runs.db<br/>• Persistent Run State Machine")]
+    end
+
+    subgraph Phase1 ["Phase 1: Market Research & Angle Ideation"]
+        P1_AGENT["create_agent (agent.py)<br/>LangChain Agent Factory"]
+        P1_MID["Middleware Stack<br/>• ToolCallLimitMiddleware (15 - used)<br/>• CostCeilingMiddleware ($0.25 - spent)<br/>• ModelCallLimitMiddleware<br/>• TraceMiddleware"]
+        P1_TOOLS["Phase 1 Tools<br/>• web_search (Competitors & Market)<br/>• sql_query (Customer Demographics)<br/>• analytics_lookup (Channel Reach)"]
+        P1_PARSE["Pydantic Validation<br/>CampaignAngles (Exactly 5 Angles)<br/>+ 1x Auto-Repair Attempt"]
+    end
+
+    subgraph HumanGate ["Human-in-the-Loop Approval Gate"]
+        GATE{"Manager Gate<br/>approve_angle(run_id, index)<br/>• State must be AWAITING_APPROVAL<br/>• Loads angle from runs.db (S10)<br/>• Verifies remaining bounds"}
+    end
+
+    subgraph Phase2 ["Phase 2: Multi-Channel Ad Copywriting"]
+        P2_AGENT["create_agent (agent.py)<br/>LangChain Agent Factory"]
+        P2_MID["Middleware Stack<br/>• ToolCallLimitMiddleware (remaining)<br/>• CostCeilingMiddleware (remaining)<br/>• TraceMiddleware"]
+        P2_TOOLS["Phase 2 Tools<br/>• draft_copy (Google Ads, IG, Email)<br/>• analytics_lookup (Reach Verification)"]
+        P2_PARSE["Pydantic Validation<br/>CampaignPackage<br/>+ 1x Auto-Repair Attempt"]
+    end
+
+    subgraph DataSecurity ["Data Boundaries & Audit Logging"]
+        SQL_VAL["SQL Validator (sqlsafe.py)<br/>7-Rule AST & LIMIT 50 Rewriter"]
+        DB[("Customer DB (db.py)<br/>customers.db SQLite<br/>mode=ro, query_only, authorizer")]
+        AUDIT[("SQL Audit Log<br/>audit/sql_audit.jsonl<br/>Accepted & Rejected, No Row Data")]
+        TRACE[("Trace Telemetry<br/>logs/agent_trace.jsonl<br/>Step & Tool Records, SHA256")]
+    end
+
+    APP -->|start_run| SRV
+    SRV --> RATE
+    SRV --> SAN
+    SRV --> STORE
+    SRV -->|Execute Phase 1| P1_AGENT
+    P1_AGENT --- P1_MID
+    P1_AGENT --> P1_TOOLS
+    P1_TOOLS --> SQL_VAL
+    SQL_VAL --> DB
+    SQL_VAL --> AUDIT
+    P1_MID --> TRACE
+    P1_AGENT --> P1_PARSE
+    P1_PARSE -->|AWAITING_APPROVAL| STORE
+
+    STORE --> GATE
+    APP -->|Manager Approves Angle Index| GATE
+    GATE -->|Load Stored Angle| SRV
+    SRV -->|Execute Phase 2| P2_AGENT
+    P2_AGENT --- P2_MID
+    P2_AGENT --> P2_TOOLS
+    P2_MID --> TRACE
+    P2_AGENT --> P2_PARSE
+    P2_PARSE -->|COMPLETED| STORE
+    STORE -.-> APP
 ```
 
 ---
@@ -316,39 +358,99 @@ Per SPEC section 20:
 
 ```
 marketing-campaign-agent/
-├── src/campaign/
-│   ├── agent.py              # Two-phase create_agent execution and repair loop
-│   ├── analytics.py          # Deterministic reach estimation
-│   ├── app.py                # Streamlit HITL dashboard
-│   ├── compliance.py         # Word-boundary banned phrase scanner
-│   ├── config.py             # Pydantic-settings configuration
-│   ├── cost.py               # Token cost tracker and BudgetExceeded exception
-│   ├── db.py                 # 3-layer read-only SQLite database connection
-│   ├── llm.py                # Model factory (Gemini, scripted, fake)
-│   ├── logging_setup.py      # Structlog JSON logger with sensitive data filtering
-│   ├── middleware.py         # Tool limit, cost ceiling, and trace middleware
-│   ├── models.py             # Pydantic v2 schemas and strict regex validators
-│   ├── prompts.py            # Phase 1, Phase 2, and repair prompt templates
-│   ├── ratelimit.py          # SQLite sliding-window rate limiter
-│   ├── sanitize.py           # Control char stripper and prompt injection detector
-│   ├── scripted.py           # Deterministic offline demo chat model
-│   ├── search_backends.py    # FixtureSearch and lazy DdgsSearch backends
-│   ├── service.py            # Service orchestrator and human approval gate
-│   ├── sqlsafe.py            # 7-rule AST SQL security validator
-│   ├── store.py              # Run state machine and SQLite persistence
-│   ├── trace_log.py          # Local append-only JSONL trace writer
-│   ├── tracing.py            # LangSmith configuration and invoke metadata
-│   └── tools/                # Pydantic-typed tools (search, sql, reach, copy)
+├── .github/
+│   ├── agents/
+│   │   └── builder.agent.md
+│   └── workflows/
+│       └── ci.yml
+├── .vscode/
+│   └── settings.json
+├── data/
+│   └── fixtures/
+│       └── search.json               # Canned competitor search fixtures
+├── docs/                             # Architecture, threat model, decisions, cost reports
+│   ├── EXPLAIN-PLAIN-ENGLISH.md
+│   ├── architecture.md
+│   ├── cost_report.md
+│   ├── decisions.md
+│   ├── open_questions.md
+│   ├── sdk_notes.md
+│   ├── threat_model.md
+│   └── trace_summary.md
 ├── scripts/
-│   ├── build_db.py           # Customer database generator (seed 42, 2,000 rows)
-│   ├── cost_report.py        # Cost and tool performance report generator
-│   ├── demo_run.py           # End-to-end scripted campaign run
-│   ├── explain_run.py        # Run explanation and trace join utility
-│   └── live_demo_run.py      # Live Gemini execution runner
-├── tests/                    # 193 offline unit, agent, service, and AppTest tests
-├── docs/                     # Architecture, threat model, decisions, cost reports
-├── pyproject.toml            # Project dependencies and tool configurations
-└── README.md
+│   ├── __init__.py
+│   ├── build_db.py                   # Customer database generator (seed 42, 2,000 rows)
+│   ├── cost_report.py                # Cost and tool performance report generator
+│   ├── demo_run.py                   # End-to-end scripted campaign run
+│   ├── explain_run.py                # Run explanation and trace join utility
+│   └── live_demo_run.py              # Live Gemini execution runner
+├── src/
+│   └── campaign/
+│       ├── tools/                    # Pydantic-typed agent tools
+│       │   ├── __init__.py
+│       │   ├── analytics_lookup.py   # Deterministic reach estimation tool
+│       │   ├── draft_copy.py         # Multi-channel advertising copy drafting tool
+│       │   ├── sql_query.py          # Read-only customer DB SQL query tool
+│       │   └── web_search.py         # Market competitor web search tool
+│       ├── __init__.py
+│       ├── agent.py                  # Two-phase create_agent execution and repair loop
+│       ├── analytics.py              # Deterministic reach estimation
+│       ├── app.py                    # Streamlit HITL dashboard
+│       ├── compliance.py             # Word-boundary banned phrase scanner
+│       ├── config.py                 # Pydantic-settings configuration
+│       ├── cost.py                   # Token cost tracker and BudgetExceeded exception
+│       ├── db.py                     # 3-layer read-only SQLite database connection
+│       ├── llm.py                    # Model factory (Gemini, scripted, fake)
+│       ├── logging_setup.py          # Structlog JSON logger with sensitive data filtering
+│       ├── middleware.py             # Tool limit, cost ceiling, and trace middleware
+│       ├── models.py                 # Pydantic v2 schemas and strict regex validators
+│       ├── prompts.py                # Phase 1, Phase 2, and repair prompt templates
+│       ├── ratelimit.py              # SQLite sliding-window rate limiter
+│       ├── sanitize.py               # Control char stripper and prompt injection detector
+│       ├── scripted.py               # Deterministic offline demo chat model
+│       ├── search_backends.py        # FixtureSearch and lazy DdgsSearch backends
+│       ├── service.py                # Service orchestrator and human approval gate
+│       ├── sqlsafe.py                # 7-rule AST SQL security validator
+│       ├── store.py                  # Run state machine and SQLite persistence
+│       ├── trace_log.py              # Local append-only JSONL trace writer
+│       └── tracing.py                # LangSmith configuration and invoke metadata
+├── tests/                            # Offline unit, agent, service, and AppTest tests
+│   ├── conftest.py
+│   ├── test_agent.py
+│   ├── test_analytics.py
+│   ├── test_app.py
+│   ├── test_boundaries.py
+│   ├── test_compliance.py
+│   ├── test_config.py
+│   ├── test_cost.py
+│   ├── test_db.py
+│   ├── test_logging.py
+│   ├── test_models.py
+│   ├── test_ratelimit.py
+│   ├── test_readme_tree.py
+│   ├── test_sanitize.py
+│   ├── test_scripted.py
+│   ├── test_scripts.py
+│   ├── test_service.py
+│   ├── test_smoke.py
+│   ├── test_sql_audit.py
+│   ├── test_sqlsafe.py
+│   ├── test_store.py
+│   ├── test_tools.py
+│   ├── test_trace_log.py
+│   └── test_tracing.py
+├── .editorconfig
+├── .env.example
+├── .gitattributes
+├── .gitignore
+├── .python-version
+├── AGENTS.md
+├── LICENSE
+├── README.md
+├── SPEC.md
+├── TASKS.md
+├── pyproject.toml
+└── uv.lock
 ```
 
 ---

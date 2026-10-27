@@ -2,6 +2,8 @@
 
 > [!NOTE]
 > **Telemetry & Trace Summary**: Captured from live and scripted execution runs across the three demo products. All model decisions, token usages, and tool invocations are logged locally into `logs/agent_trace.jsonl`.
+>
+> **Historical Benchmark Snapshot (Recorded on 2026-10-19 / T14)**: The traces below represent an immutable snapshot captured during the T14 benchmark runs (`RUN-20261019-6287`, `RUN-20261019-1263`, `RUN-20261019-7685`). Individual traces remain verifiable at any time using `uv run python scripts/explain_run.py <run_id>`.
 
 ## Trace for Run: `RUN-20261019-6287`
 ```text

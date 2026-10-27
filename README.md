@@ -11,27 +11,84 @@
 
 ## Architecture Diagram
 
-```
-                      Streamlit dashboard (app.py)
-                 user id · product form · 5 angle cards · approve/reject · package · cost · trace
-                                   │ service.py (the only orchestrator)
-        ┌──────────────────────────┼──────────────────────────────┐
-        ▼                          ▼                              ▼
-  ratelimit.py              store.py (runs.db)             trace_log.py (JSONL)
-  sanitize.py               run state machine              every tool call + model step
-        │
-        ▼ PHASE 1                                           PHASE 2 (only after approve_angle)
-  create_agent(model, tools, middleware)                     create_agent(model, tools, middleware)
-    middleware: ToolCallLimit(15 − used) · ModelCallLimit · CostCeiling(0.25 − spent) · Trace
-    tools: web_search  sql_query  analytics_lookup           tools: draft_copy  analytics_lookup
-        │                                                          │
-        ▼                                                          ▼
-  final message ─► CampaignAngles (Pydantic, exactly 5)      final message ─► CampaignPackage (Pydantic)
+```mermaid
+flowchart TD
+    subgraph UI ["User Interface"]
+        APP["Streamlit Dashboard (app.py)<br/>• Product Brief Form<br/>• 5 Proposed Angle Cards<br/>• Human Gate: Approve or Reject<br/>• Copy Review & Telemetry Inspector"]
+    end
 
- tools ──► search_backends (fixture | ddgs)   sqlsafe.py ─► db.py (customers.db, mode=ro + query_only + authorizer)
- every SQL string ──► audit/sql_audit.jsonl (accepted or rejected, reason, no row data)
- LangSmith: automatic LangChain tracing when LANGSMITH_TRACING=true
+    subgraph ServiceLayer ["Service Orchestrator (service.py)"]
+        SRV["CampaignService<br/>• Two-Phase Orchestration & State Machine<br/>• Enforces Sequential Gate & Bound Hand-off"]
+        RATE["RateLimiter (ratelimit.py)<br/>• Sliding-window SQLite rate_events"]
+        SAN["Input Sanitizer (sanitize.py)<br/>• Strip Control Chars & Zero-Width<br/>• Prompt Injection Scanner"]
+        STORE[("RunStore (store.py)<br/>• SQLite runs.db<br/>• Persistent Run State Machine")]
+    end
+
+    subgraph Phase1 ["Phase 1: Market Research & Angle Ideation"]
+        P1_AGENT["create_agent (agent.py)<br/>LangChain Agent Factory"]
+        P1_MID["Middleware Stack<br/>• ToolCallLimitMiddleware (15 - used)<br/>• CostCeilingMiddleware ($0.25 - spent)<br/>• ModelCallLimitMiddleware<br/>• TraceMiddleware"]
+        P1_TOOLS["Phase 1 Tools<br/>• web_search (Competitors & Market)<br/>• sql_query (Customer Demographics)<br/>• analytics_lookup (Channel Reach)"]
+        P1_PARSE["Pydantic Validation<br/>CampaignAngles (Exactly 5 Angles)<br/>+ 1x Auto-Repair Attempt"]
+    end
+
+    subgraph HumanGate ["Human-in-the-Loop Approval Gate"]
+        GATE{"Manager Gate<br/>approve_angle(run_id, index)<br/>• State must be AWAITING_APPROVAL<br/>• Loads angle from runs.db (S10)<br/>• Verifies remaining bounds"}
+    end
+
+    subgraph Phase2 ["Phase 2: Multi-Channel Ad Copywriting"]
+        P2_AGENT["create_agent (agent.py)<br/>LangChain Agent Factory"]
+        P2_MID["Middleware Stack<br/>• ToolCallLimitMiddleware (remaining)<br/>• CostCeilingMiddleware (remaining)<br/>• TraceMiddleware"]
+        P2_TOOLS["Phase 2 Tools<br/>• draft_copy (Google Ads, IG, Email)<br/>• analytics_lookup (Reach Verification)"]
+        P2_PARSE["Pydantic Validation<br/>CampaignPackage<br/>+ 1x Auto-Repair Attempt"]
+    end
+
+    subgraph DataSecurity ["Data Boundaries & Audit Logging"]
+        SQL_VAL["SQL Validator (sqlsafe.py)<br/>7-Rule AST & LIMIT 50 Rewriter"]
+        DB[("Customer DB (db.py)<br/>customers.db SQLite<br/>mode=ro, query_only, authorizer")]
+        AUDIT[("SQL Audit Log<br/>audit/sql_audit.jsonl<br/>Accepted & Rejected, No Row Data")]
+        TRACE[("Trace Telemetry<br/>logs/agent_trace.jsonl<br/>Step & Tool Records, SHA256")]
+    end
+
+    APP -->|start_run| SRV
+    SRV --> RATE
+    SRV --> SAN
+    SRV --> STORE
+    SRV -->|Execute Phase 1| P1_AGENT
+    P1_AGENT --- P1_MID
+    P1_AGENT --> P1_TOOLS
+    P1_TOOLS --> SQL_VAL
+    SQL_VAL --> DB
+    SQL_VAL --> AUDIT
+    P1_MID --> TRACE
+    P1_AGENT --> P1_PARSE
+    P1_PARSE -->|AWAITING_APPROVAL| STORE
+
+    STORE --> GATE
+    APP -->|Manager Approves Angle Index| GATE
+    GATE -->|Load Stored Angle| SRV
+    SRV -->|Execute Phase 2| P2_AGENT
+    P2_AGENT --- P2_MID
+    P2_AGENT --> P2_TOOLS
+    P2_MID --> TRACE
+    P2_AGENT --> P2_PARSE
+    P2_PARSE -->|COMPLETED| STORE
+    STORE -.-> APP
 ```
+
+---
+
+## Where LangChain is used
+
+| Concept | File and Function / Class | Exact Import | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Agent Factory** | `src/campaign/agent.py`<br>`build_agent` | `from langchain.agents import create_agent` | Wraps LangChain 1.4 `create_agent` with model, tools, system prompt, and middleware. |
+| **Middleware (Limits)** | `src/campaign/agent.py`<br>`run_phase1`, `run_phase2` | `from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware` | Caps tool calls (15 max across run) and bounds model iteration steps. |
+| **Middleware (Hooks)** | `src/campaign/middleware.py`<br>`CostCeilingMiddleware`, `TraceMiddleware` | `from langchain.agents.middleware import AgentMiddleware`<br>`from langchain_core.messages import AIMessage` | Subclasses `after_model` to enforce $0.25 cost ceiling and log JSONL traces. |
+| **Tools** | `src/campaign/tools/web_search.py` (`web_search`)<br>`src/campaign/tools/sql_query.py` (`sql_query`)<br>`src/campaign/tools/analytics_lookup.py` (`analytics_lookup`)<br>`src/campaign/tools/draft_copy.py` (`draft_copy`) | `from langchain_core.tools import tool` | Binds safe execution functions to Pydantic argument schemas (`args_schema`). |
+| **Chat Model (Live)** | `src/campaign/llm.py`<br>`get_chat_model` | `from langchain_google_genai import ChatGoogleGenerativeAI` | Configures Google Gemini 3.8 Flash with temperature=0, retries, and output token caps. |
+| **Chat Model (Offline / Test)** | `src/campaign/llm.py` (`FakeToolModel`)<br>`src/campaign/scripted.py` (`ScriptedChatModel`) | `from langchain_core.language_models.fake_chat_models import GenericFakeChatModel`<br>`from langchain_core.language_models.chat_models import BaseChatModel` | Provides deterministic offline testing and scripted demo chat models with tool binding. |
+| **Messages** | `src/campaign/agent.py`<br>`run_phase1`, `run_phase2` | `from langchain_core.messages import HumanMessage` | Formats input user prompts passed to `agent.invoke({"messages": [...]})`. |
+| **Tracing** | `src/campaign/tracing.py`<br>`validate_tracing_settings`, `get_invoke_config` | Native LangChain env vars & `RunnableConfig` dict (`tags`, `metadata`, `run_name`) | Configures LangSmith tracing environment and attaches metadata to agent invocations. |
 
 ---
 
@@ -46,30 +103,135 @@
 Copy and paste the following commands to clone and run the application completely offline:
 
 ### Prerequisites
-- Python 3.13 (`>=3.13,<3.14`)
-- `uv` package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- Python 3.13 (`>=3.13,<3.14`). *Note: `uv` fetches and provisions Python 3.13 automatically if not already present on your machine.*
+- `uv` package manager:
+  - **Linux / macOS**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - **Windows (PowerShell)**: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 ### Setup and Offline Execution
+
+Run the setup and execution steps below. Pinned dependencies and database seeds ensure 100% offline reproducibility:
+
+#### 1. Clone repository
+**Bash:**
 ```bash
-# 1. Clone repository
 git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
 cd marketing-campaign-agent
+```
+**PowerShell:**
+```powershell
+git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
+cd marketing-campaign-agent
+```
 
-# 2. Install dependencies with pinned lockfile
+#### 2. Install dependencies with pinned lockfile
+**Bash & PowerShell:**
+```bash
 uv sync
+```
+*Expected output:*
+```text
+Resolved 89 packages in 13ms
+Checked 83 packages in 13ms
+```
+*(Note: `uv` fetches and provisions Python 3.13 automatically if not already present).*
 
-# 3. Create environment file from template
+#### 3. Create environment file from template
+**Bash:**
+```bash
 cp .env.example .env
+```
+**PowerShell:**
+```powershell
+Copy-Item .env.example .env
+```
 
-# 4. Build synthetic customer database (seed 42, 2,000 customers)
+#### 4. Build synthetic customer database (seed 42, 2,000 customers)
+**Bash & PowerShell:**
+```bash
 uv run python scripts/build_db.py
+```
+*Expected output:*
+```text
+Database built successfully at data/customers.db with seed 42
+```
 
-# 5. Run end-to-end command line demo (scripted mode, no API key required)
+#### 5. Run end-to-end command line demo (scripted mode, no API key required)
+**Bash & PowerShell:**
+```bash
 uv run python scripts/demo_run.py
+```
+*Expected output (trimmed):*
+```text
+======================================================================
+STARTING CAMPAIGN RUN (SCRIPTED DEMO)
+Product: Brightside Smart Water Bottle
+Segment: young-professionals
+Budget:  $5000.00
+======================================================================
+2026-10-27 13:26:27 [info     ] phase1_completed               cost_usd=0.007200000000000001 run_id=RUN-20261027-3528 status=AWAITING_APPROVAL tool_calls_used=3
 
-# 6. Launch Streamlit Human-in-the-Loop dashboard
+Phase 1 Complete!
+Run ID:          RUN-20261027-3528
+Status:          AWAITING_APPROVAL
+Tool calls used: 3/15
+Notional cost:   $0.0072 (Notional: tokens x pricing; free tier bills $0.00)
+
+--- 5 PROPOSED CAMPAIGN ANGLES ---
+
+[0] Smart Hydration for Busy Professionals
+    Positioning: The intelligent hydration system designed specifically for desk-bound professionals and daily commuters.
+    Key Message: Build healthy hydration habits automatically without interrupting your workday.
+    Reach:       54,000
+    Evidence:    Search shows top competitor lacks insulated lid, 68% of customers prefer 24oz capacity
+...
+Manager Approval: Approving Angle [0]...
+2026-10-27 13:26:28 [info     ] phase2_completed               cost_usd=0.0144 run_id=RUN-20261027-3528 status=COMPLETED tool_calls_used=6
+
+Phase 2 Complete!
+Status:                COMPLETED
+Total tool calls used: 6/15
+Total notional cost:   $0.0144 (Notional: tokens x pricing; free tier bills $0.00)
+
+======================================================================
+GENERATED CAMPAIGN PACKAGE: 'Smart Hydration for Busy Professionals'
+======================================================================
+
+[Google Ads]
+Headlines:    Brightside Smart Bottle | Hydrate on Busy Days | Chilled for 24 Hours
+Descriptions: Track daily hydration with smart glow reminders. Stainless steel vacuum insulation. // Sleek desk-friendly design with whisper-quiet notifications. Shop Brightside Goods.
+
+[Instagram]
+Caption:      Workdays get busy, but staying hydrated should be effortless. The Brightside Smart Bottle reminds you when it's time to drink, keeping your water chilled for 24 hours without plastic. #hydrate #productivity #wellness #brightside #workday
+...
+Demo run completed successfully.
+```
+
+#### 6. Launch Streamlit Human-in-the-Loop dashboard
+**Bash & PowerShell:**
+```bash
 uv run streamlit run src/campaign/app.py
 ```
+*Expected output (trimmed):*
+```text
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://172.17.12.43:8501
+```
+
+### SCRIPTED DEMO vs. Live Gemini: What is Deterministic vs. Model Answer
+
+This repository supports two execution modes via `LLM_MODE`:
+
+| Execution Aspect | Scripted Demo Mode (`LLM_MODE="scripted"`, Default) | Live Gemini Mode (`LLM_MODE="gemini"`) |
+| :--- | :--- | :--- |
+| **Model Implementation** | `ScriptedChatModel` (`src/campaign/scripted.py`) subclassing LangChain `BaseChatModel`. | `ChatGoogleGenerativeAI` (`src/campaign/llm.py`) connecting to `gemini-3.8-flash`. |
+| **Angle Generation & Copywriting** | **Deterministic fixture**: The 5 proposed angles and 3-channel advertising copy are pre-composed fixtures for 3 demo products. They are **not** an LLM output. | **Dynamic LLM generation**: Google Gemini 3.8 Flash autonomously synthesizes new angles and drafts ad copy from tool outputs. |
+| **Tool Invocations** | **Canned call schedule, real execution**: `ScriptedChatModel` emits predefined tool call signatures (`web_search` -> `sql_query` -> `analytics_lookup`), but the tools run **real code**: SQL runs against `customers.db`, reach is computed by `analytics.py`, and search queries local fixtures. | **Dynamic tool calling**: Gemini decides autonomously which tools to call, inspects returned observation outputs, and requests additional data as needed. |
+| **Token Usage & Costs** | **Deterministic simulated usage**: Each turn reports fixed token counts (`450 input / 150 output`) to exercise the `CostCeilingMiddleware` and cost accumulation tracking. | **Live API token usage**: Real token counts reported by the Gemini API metadata are accumulated and checked against the $0.25 ceiling. |
+| **API Keys & Network** | **100% Offline**: Requires no external network calls, no API keys, and incurs $0.00 notional cost. | **Requires API Key**: Requires `GEMINI_API_KEY` with outbound internet access. |
+| **Security & Middleware** | **Identical**: Tool-call cap (15), cost ceiling ($0.25), SQL AST validator, read-only DB boundary, rate limiter, and approval gate apply identically in both modes. | **Identical**: Tool-call cap (15), cost ceiling ($0.25), SQL AST validator, read-only DB boundary, rate limiter, and approval gate apply identically in both modes. |
 
 In the dashboard:
 1. Verify the sidebar indicates `SCRIPTED DEMO: outputs are deterministic, not Gemini`.
@@ -84,10 +246,24 @@ In the dashboard:
 
 To run against the live Google Gemini API:
 
+**Bash (Linux / macOS / WSL2):**
 ```bash
 # Provide GEMINI_API_KEY as an environment variable or inside .env
 export GEMINI_API_KEY="your-gemini-api-key"
 export LLM_MODE="gemini"
+
+# Run end-to-end demo using Gemini 3.8 Flash
+uv run python scripts/demo_run.py
+
+# Or launch dashboard in live Gemini mode
+uv run streamlit run src/campaign/app.py
+```
+
+**PowerShell (Windows):**
+```powershell
+# Provide GEMINI_API_KEY as an environment variable or inside .env
+$env:GEMINI_API_KEY="your-gemini-api-key"
+$env:LLM_MODE="gemini"
 
 # Run end-to-end demo using Gemini 3.8 Flash
 uv run python scripts/demo_run.py
@@ -106,6 +282,21 @@ Both execution phases share a single resource budget:
 - **15 Tool Invocations Limit**: Managed by `ToolCallLimitMiddleware(run_limit=remaining, exit_behavior="end")`. The 16th call is blocked, leaving executed calls at exactly 15 and transitioning the run status to `LIMIT_REACHED`.
 - **$0.25 Cost Ceiling**: Tracked per token via `CostCeilingMiddleware`. When accumulated notional spend exceeds $0.25, `BudgetExceeded` is raised from `after_model`, immediately halting execution and updating status to `BUDGET_EXCEEDED` without losing partial state.
 - **Maximum 50 SQL Rows**: Enforced by AST analysis in `src/campaign/sqlsafe.py`, automatically rewriting or appending `LIMIT 50`.
+
+---
+
+## Guardrails and logging at a glance
+
+| Control | Enforcing File | Mechanism & Verification | Real Audit / Trace Log Sample (Secrets & Product Text Excluded) |
+| :--- | :--- | :--- | :--- |
+| **Tool-call cap 15** | `src/campaign/agent.py` | `ToolCallLimitMiddleware(run_limit=remaining, exit_behavior="end")` halts execution after 15 calls across phases; status becomes `LIMIT_REACHED`. | `{"type":"model_step","ts":"2026-10-27T13:22:59.429259+00:00","run_id":"RUN-20261027-4438","step":4,"tool_calls_requested":0,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0054,"content_sha256":"34484f6e5f5f86eb03c8bd8c36df5180b16a16827dc078a4b68b27dcfa2bd660"}` |
+| **Cost ceiling $0.25** | `src/campaign/middleware.py`<br>`src/campaign/cost.py` | `CostCeilingMiddleware` checks `is_exceeded()` in `after_model`, raising `BudgetExceeded` if notional token spend reaches $0.25. | `{"type":"model_step","ts":"2026-10-27T13:22:59.370976+00:00","run_id":"RUN-20261027-4438","step":2,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0018,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
+| **SQL validator** | `src/campaign/sqlsafe.py` | 7-rule AST validator blocks non-SELECT, multiple statements, comments, and unlisted tables; caps `LIMIT 50`. | `{"ts":"2026-10-27T13:22:26.329366+00:00","run_id":"RUN-20261027-9550","accepted":false,"code":"STACKED_STATEMENTS","sql":"SELECT * FROM customers; DROP TABLE customers","row_count":0}` |
+| **Read-only DB** | `src/campaign/db.py` | 3-layer boundary: `mode=ro` URI, `PRAGMA query_only=ON`, and SQLite bytecode authorizer callback. | `{"ts":"2026-10-27T13:22:59.395540+00:00","run_id":"RUN-20261027-4438","accepted":true,"code":null,"sql":"SELECT age_band, AVG(lifetime_value) AS avg_ltv FROM customers GROUP BY age_band LIMIT 50","row_count":5}` |
+| **Sanitizer** | `src/campaign/sanitize.py` | Strips control/zero-width characters; flags prompt injections; fails closed on hostile briefs before model invocation. | `{"type":"tool_call","ts":"2026-10-27T13:22:59.419084+00:00","run_id":"RUN-20261027-4438","step":3,"tool":"analytics_lookup","args":"{\"segment\":\"fitness-enthusiasts\",\"channel\":\"instagram\",\"budget_usd\":5000.0}","ok":true,"error_code":null,"result_bytes":49,"duration_ms":4.18}` |
+| **Untrusted-data markers** | `src/campaign/sanitize.py`<br>`src/campaign/tools/` | Escapes nested tags and wraps external search snippets and DB records in `<untrusted>` tags to prevent indirect prompt injection. | `{"type":"tool_call","ts":"2026-10-27T13:22:59.396615+00:00","run_id":"RUN-20261027-4438","step":2,"tool":"sql_query","args":"{\"query\":\"SELECT age_band, AVG(lifetime_value) AS avg_ltv FROM customers GROUP BY age_band LIMIT 50\"}","ok":true,"error_code":null,"result_bytes":205,"duration_ms":17.69}` |
+| **Rate limit** | `src/campaign/ratelimit.py`<br>`src/campaign/store.py` | Sliding-window limiter backed by SQLite `rate_events` enforces max 10 runs per 600 seconds per user ID. | `{"type":"model_step","ts":"2026-10-27T13:22:59.349763+00:00","run_id":"RUN-20261027-4438","step":1,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
+| **Approval gate** | `src/campaign/service.py` | Phase 2 drafting requires stored `AWAITING_APPROVAL` status and retrieves the angle by index from `runs.db`, ignoring UI payloads. | `{"type":"model_step","ts":"2026-10-27T13:22:59.514369+00:00","run_id":"RUN-20261027-4438","step":1,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0072,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
 
 ---
 
@@ -131,6 +322,8 @@ Both execution phases share a single resource budget:
 
 > [!NOTE]
 > **Notional Cost Caveat**: All costs are notional estimates calculated from configured token rates (SPEC section 10: $1.50/1M input tokens, $7.50/1M output tokens). Google Gemini free tier and scripted demo runs bill $0.00. No actual charges were incurred.
+>
+> **Historical Benchmark Snapshot (Recorded on 2026-10-19 / T14)**: The metrics below represent an immutable snapshot of 31 runs executed during the T14 benchmark cycle. Because `scripts/cost_report.py` dynamically aggregates all runs stored in `data/runs.db` and `logs/agent_trace.jsonl`, executing `uv run python scripts/cost_report.py` in an active workspace will calculate fresh metrics reflecting all subsequent runs.
 
 - **Total Recorded Runs**: 31
 - **Completed Runs**: 22
@@ -167,39 +360,99 @@ Per SPEC section 20:
 
 ```
 marketing-campaign-agent/
-├── src/campaign/
-│   ├── agent.py              # Two-phase create_agent execution and repair loop
-│   ├── analytics.py          # Deterministic reach estimation
-│   ├── app.py                # Streamlit HITL dashboard
-│   ├── compliance.py         # Word-boundary banned phrase scanner
-│   ├── config.py             # Pydantic-settings configuration
-│   ├── cost.py               # Token cost tracker and BudgetExceeded exception
-│   ├── db.py                 # 3-layer read-only SQLite database connection
-│   ├── llm.py                # Model factory (Gemini, scripted, fake)
-│   ├── logging_setup.py      # Structlog JSON logger with sensitive data filtering
-│   ├── middleware.py         # Tool limit, cost ceiling, and trace middleware
-│   ├── models.py             # Pydantic v2 schemas and strict regex validators
-│   ├── prompts.py            # Phase 1, Phase 2, and repair prompt templates
-│   ├── ratelimit.py          # SQLite sliding-window rate limiter
-│   ├── sanitize.py           # Control char stripper and prompt injection detector
-│   ├── scripted.py           # Deterministic offline demo chat model
-│   ├── search_backends.py    # FixtureSearch and lazy DdgsSearch backends
-│   ├── service.py            # Service orchestrator and human approval gate
-│   ├── sqlsafe.py            # 7-rule AST SQL security validator
-│   ├── store.py              # Run state machine and SQLite persistence
-│   ├── trace_log.py          # Local append-only JSONL trace writer
-│   ├── tracing.py            # LangSmith configuration and invoke metadata
-│   └── tools/                # Pydantic-typed tools (search, sql, reach, copy)
+├── .github/
+│   ├── agents/
+│   │   └── builder.agent.md
+│   └── workflows/
+│       └── ci.yml
+├── .vscode/
+│   └── settings.json
+├── data/
+│   └── fixtures/
+│       └── search.json               # Canned competitor search fixtures
+├── docs/                             # Architecture, threat model, decisions, cost reports
+│   ├── EXPLAIN-PLAIN-ENGLISH.md
+│   ├── architecture.md
+│   ├── cost_report.md
+│   ├── decisions.md
+│   ├── open_questions.md
+│   ├── sdk_notes.md
+│   ├── threat_model.md
+│   └── trace_summary.md
 ├── scripts/
-│   ├── build_db.py           # Customer database generator (seed 42, 2,000 rows)
-│   ├── cost_report.py        # Cost and tool performance report generator
-│   ├── demo_run.py           # End-to-end scripted campaign run
-│   ├── explain_run.py        # Run explanation and trace join utility
-│   └── live_demo_run.py      # Live Gemini execution runner
-├── tests/                    # 193 offline unit, agent, service, and AppTest tests
-├── docs/                     # Architecture, threat model, decisions, cost reports
-├── pyproject.toml            # Project dependencies and tool configurations
-└── README.md
+│   ├── __init__.py
+│   ├── build_db.py                   # Customer database generator (seed 42, 2,000 rows)
+│   ├── cost_report.py                # Cost and tool performance report generator
+│   ├── demo_run.py                   # End-to-end scripted campaign run
+│   ├── explain_run.py                # Run explanation and trace join utility
+│   └── live_demo_run.py              # Live Gemini execution runner
+├── src/
+│   └── campaign/
+│       ├── tools/                    # Pydantic-typed agent tools
+│       │   ├── __init__.py
+│       │   ├── analytics_lookup.py   # Deterministic reach estimation tool
+│       │   ├── draft_copy.py         # Multi-channel advertising copy drafting tool
+│       │   ├── sql_query.py          # Read-only customer DB SQL query tool
+│       │   └── web_search.py         # Market competitor web search tool
+│       ├── __init__.py
+│       ├── agent.py                  # Two-phase create_agent execution and repair loop
+│       ├── analytics.py              # Deterministic reach estimation
+│       ├── app.py                    # Streamlit HITL dashboard
+│       ├── compliance.py             # Word-boundary banned phrase scanner
+│       ├── config.py                 # Pydantic-settings configuration
+│       ├── cost.py                   # Token cost tracker and BudgetExceeded exception
+│       ├── db.py                     # 3-layer read-only SQLite database connection
+│       ├── llm.py                    # Model factory (Gemini, scripted, fake)
+│       ├── logging_setup.py          # Structlog JSON logger with sensitive data filtering
+│       ├── middleware.py             # Tool limit, cost ceiling, and trace middleware
+│       ├── models.py                 # Pydantic v2 schemas and strict regex validators
+│       ├── prompts.py                # Phase 1, Phase 2, and repair prompt templates
+│       ├── ratelimit.py              # SQLite sliding-window rate limiter
+│       ├── sanitize.py               # Control char stripper and prompt injection detector
+│       ├── scripted.py               # Deterministic offline demo chat model
+│       ├── search_backends.py        # FixtureSearch and lazy DdgsSearch backends
+│       ├── service.py                # Service orchestrator and human approval gate
+│       ├── sqlsafe.py                # 7-rule AST SQL security validator
+│       ├── store.py                  # Run state machine and SQLite persistence
+│       ├── trace_log.py              # Local append-only JSONL trace writer
+│       └── tracing.py                # LangSmith configuration and invoke metadata
+├── tests/                            # Offline unit, agent, service, and AppTest tests
+│   ├── conftest.py
+│   ├── test_agent.py
+│   ├── test_analytics.py
+│   ├── test_app.py
+│   ├── test_boundaries.py
+│   ├── test_compliance.py
+│   ├── test_config.py
+│   ├── test_cost.py
+│   ├── test_db.py
+│   ├── test_logging.py
+│   ├── test_models.py
+│   ├── test_ratelimit.py
+│   ├── test_readme_tree.py
+│   ├── test_sanitize.py
+│   ├── test_scripted.py
+│   ├── test_scripts.py
+│   ├── test_service.py
+│   ├── test_smoke.py
+│   ├── test_sql_audit.py
+│   ├── test_sqlsafe.py
+│   ├── test_store.py
+│   ├── test_tools.py
+│   ├── test_trace_log.py
+│   └── test_tracing.py
+├── .editorconfig
+├── .env.example
+├── .gitattributes
+├── .gitignore
+├── .python-version
+├── AGENTS.md
+├── LICENSE
+├── README.md
+├── SPEC.md
+├── TASKS.md
+├── pyproject.toml
+└── uv.lock
 ```
 
 ---

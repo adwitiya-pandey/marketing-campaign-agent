@@ -124,6 +124,21 @@ Both execution phases share a single resource budget:
 
 ---
 
+## Guardrails and logging at a glance
+
+| Control | Enforcing File | Mechanism & Verification | Real Audit / Trace Log Sample (Secrets & Product Text Excluded) |
+| :--- | :--- | :--- | :--- |
+| **Tool-call cap 15** | `src/campaign/agent.py` | `ToolCallLimitMiddleware(run_limit=remaining, exit_behavior="end")` halts execution after 15 calls across phases; status becomes `LIMIT_REACHED`. | `{"type":"model_step","ts":"2026-10-27T13:22:59.429259+00:00","run_id":"RUN-20261027-4438","step":4,"tool_calls_requested":0,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0054,"content_sha256":"34484f6e5f5f86eb03c8bd8c36df5180b16a16827dc078a4b68b27dcfa2bd660"}` |
+| **Cost ceiling $0.25** | `src/campaign/middleware.py`<br>`src/campaign/cost.py` | `CostCeilingMiddleware` checks `is_exceeded()` in `after_model`, raising `BudgetExceeded` if notional token spend reaches $0.25. | `{"type":"model_step","ts":"2026-10-27T13:22:59.370976+00:00","run_id":"RUN-20261027-4438","step":2,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0018,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
+| **SQL validator** | `src/campaign/sqlsafe.py` | 7-rule AST validator blocks non-SELECT, multiple statements, comments, and unlisted tables; caps `LIMIT 50`. | `{"ts":"2026-10-27T13:22:26.329366+00:00","run_id":"RUN-20261027-9550","accepted":false,"code":"STACKED_STATEMENTS","sql":"SELECT * FROM customers; DROP TABLE customers","row_count":0}` |
+| **Read-only DB** | `src/campaign/db.py` | 3-layer boundary: `mode=ro` URI, `PRAGMA query_only=ON`, and SQLite bytecode authorizer callback. | `{"ts":"2026-10-27T13:22:59.395540+00:00","run_id":"RUN-20261027-4438","accepted":true,"code":null,"sql":"SELECT age_band, AVG(lifetime_value) AS avg_ltv FROM customers GROUP BY age_band LIMIT 50","row_count":5}` |
+| **Sanitizer** | `src/campaign/sanitize.py` | Strips control/zero-width characters; flags prompt injections; fails closed on hostile briefs before model invocation. | `{"type":"tool_call","ts":"2026-10-27T13:22:59.419084+00:00","run_id":"RUN-20261027-4438","step":3,"tool":"analytics_lookup","args":"{\"segment\":\"fitness-enthusiasts\",\"channel\":\"instagram\",\"budget_usd\":5000.0}","ok":true,"error_code":null,"result_bytes":49,"duration_ms":4.18}` |
+| **Untrusted-data markers** | `src/campaign/sanitize.py`<br>`src/campaign/tools/` | Escapes nested tags and wraps external search snippets and DB records in `<untrusted>` tags to prevent indirect prompt injection. | `{"type":"tool_call","ts":"2026-10-27T13:22:59.396615+00:00","run_id":"RUN-20261027-4438","step":2,"tool":"sql_query","args":"{\"query\":\"SELECT age_band, AVG(lifetime_value) AS avg_ltv FROM customers GROUP BY age_band LIMIT 50\"}","ok":true,"error_code":null,"result_bytes":205,"duration_ms":17.69}` |
+| **Rate limit** | `src/campaign/ratelimit.py`<br>`src/campaign/store.py` | Sliding-window limiter backed by SQLite `rate_events` enforces max 10 runs per 600 seconds per user ID. | `{"type":"model_step","ts":"2026-10-27T13:22:59.349763+00:00","run_id":"RUN-20261027-4438","step":1,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
+| **Approval gate** | `src/campaign/service.py` | Phase 2 drafting requires stored `AWAITING_APPROVAL` status and retrieves the angle by index from `runs.db`, ignoring UI payloads. | `{"type":"model_step","ts":"2026-10-27T13:22:59.514369+00:00","run_id":"RUN-20261027-4438","step":1,"tool_calls_requested":1,"input_tokens":450,"output_tokens":150,"running_cost_usd":0.0072,"content_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}` |
+
+---
+
 ## Security Architecture Summary
 
 | ID | Control / Requirement | Implementation |

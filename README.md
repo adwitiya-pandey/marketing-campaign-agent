@@ -68,49 +68,128 @@ Copy and paste the following commands to clone and run the application completel
 
 ### Setup and Offline Execution
 
-**Bash (Linux / macOS / WSL2):**
+Run the setup and execution steps below. Pinned dependencies and database seeds ensure 100% offline reproducibility:
+
+#### 1. Clone repository
+**Bash:**
 ```bash
-# 1. Clone repository
 git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
 cd marketing-campaign-agent
-
-# 2. Install dependencies with pinned lockfile (uv fetches Python 3.13 automatically)
-uv sync
-
-# 3. Create environment file from template
-cp .env.example .env
-
-# 4. Build synthetic customer database (seed 42, 2,000 customers)
-uv run python scripts/build_db.py
-
-# 5. Run end-to-end command line demo (scripted mode, no API key required)
-uv run python scripts/demo_run.py
-
-# 6. Launch Streamlit Human-in-the-Loop dashboard
-uv run streamlit run src/campaign/app.py
 ```
-
-**PowerShell (Windows):**
+**PowerShell:**
 ```powershell
-# 1. Clone repository
 git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
 cd marketing-campaign-agent
+```
 
-# 2. Install dependencies with pinned lockfile (uv fetches Python 3.13 automatically)
+#### 2. Install dependencies with pinned lockfile
+**Bash & PowerShell:**
+```bash
 uv sync
+```
+*Expected output:*
+```text
+Resolved 89 packages in 13ms
+Checked 83 packages in 13ms
+```
+*(Note: `uv` fetches and provisions Python 3.13 automatically if not already present).*
 
-# 3. Create environment file from template
+#### 3. Create environment file from template
+**Bash:**
+```bash
+cp .env.example .env
+```
+**PowerShell:**
+```powershell
 Copy-Item .env.example .env
+```
 
-# 4. Build synthetic customer database (seed 42, 2,000 customers)
+#### 4. Build synthetic customer database (seed 42, 2,000 customers)
+**Bash & PowerShell:**
+```bash
 uv run python scripts/build_db.py
+```
+*Expected output:*
+```text
+Database built successfully at data/customers.db with seed 42
+```
 
-# 5. Run end-to-end command line demo (scripted mode, no API key required)
+#### 5. Run end-to-end command line demo (scripted mode, no API key required)
+**Bash & PowerShell:**
+```bash
 uv run python scripts/demo_run.py
+```
+*Expected output (trimmed):*
+```text
+======================================================================
+STARTING CAMPAIGN RUN (SCRIPTED DEMO)
+Product: Brightside Smart Water Bottle
+Segment: young-professionals
+Budget:  $5000.00
+======================================================================
+2026-10-27 13:26:27 [info     ] phase1_completed               cost_usd=0.007200000000000001 run_id=RUN-20261027-3528 status=AWAITING_APPROVAL tool_calls_used=3
 
-# 6. Launch Streamlit Human-in-the-Loop dashboard
+Phase 1 Complete!
+Run ID:          RUN-20261027-3528
+Status:          AWAITING_APPROVAL
+Tool calls used: 3/15
+Notional cost:   $0.0072 (Notional: tokens x pricing; free tier bills $0.00)
+
+--- 5 PROPOSED CAMPAIGN ANGLES ---
+
+[0] Smart Hydration for Busy Professionals
+    Positioning: The intelligent hydration system designed specifically for desk-bound professionals and daily commuters.
+    Key Message: Build healthy hydration habits automatically without interrupting your workday.
+    Reach:       54,000
+    Evidence:    Search shows top competitor lacks insulated lid, 68% of customers prefer 24oz capacity
+...
+Manager Approval: Approving Angle [0]...
+2026-10-27 13:26:28 [info     ] phase2_completed               cost_usd=0.0144 run_id=RUN-20261027-3528 status=COMPLETED tool_calls_used=6
+
+Phase 2 Complete!
+Status:                COMPLETED
+Total tool calls used: 6/15
+Total notional cost:   $0.0144 (Notional: tokens x pricing; free tier bills $0.00)
+
+======================================================================
+GENERATED CAMPAIGN PACKAGE: 'Smart Hydration for Busy Professionals'
+======================================================================
+
+[Google Ads]
+Headlines:    Brightside Smart Bottle | Hydrate on Busy Days | Chilled for 24 Hours
+Descriptions: Track daily hydration with smart glow reminders. Stainless steel vacuum insulation. // Sleek desk-friendly design with whisper-quiet notifications. Shop Brightside Goods.
+
+[Instagram]
+Caption:      Workdays get busy, but staying hydrated should be effortless. The Brightside Smart Bottle reminds you when it's time to drink, keeping your water chilled for 24 hours without plastic. #hydrate #productivity #wellness #brightside #workday
+...
+Demo run completed successfully.
+```
+
+#### 6. Launch Streamlit Human-in-the-Loop dashboard
+**Bash & PowerShell:**
+```bash
 uv run streamlit run src/campaign/app.py
 ```
+*Expected output (trimmed):*
+```text
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://172.17.12.43:8501
+```
+
+### SCRIPTED DEMO vs. Live Gemini: What is Deterministic vs. Model Answer
+
+This repository supports two execution modes via `LLM_MODE`:
+
+| Execution Aspect | Scripted Demo Mode (`LLM_MODE="scripted"`, Default) | Live Gemini Mode (`LLM_MODE="gemini"`) |
+| :--- | :--- | :--- |
+| **Model Implementation** | `ScriptedChatModel` (`src/campaign/scripted.py`) subclassing LangChain `BaseChatModel`. | `ChatGoogleGenerativeAI` (`src/campaign/llm.py`) connecting to `gemini-3.8-flash`. |
+| **Angle Generation & Copywriting** | **Deterministic fixture**: The 5 proposed angles and 3-channel advertising copy are pre-composed fixtures for 3 demo products. They are **not** an LLM output. | **Dynamic LLM generation**: Google Gemini 3.8 Flash autonomously synthesizes new angles and drafts ad copy from tool outputs. |
+| **Tool Invocations** | **Canned call schedule, real execution**: `ScriptedChatModel` emits predefined tool call signatures (`web_search` -> `sql_query` -> `analytics_lookup`), but the tools run **real code**: SQL runs against `customers.db`, reach is computed by `analytics.py`, and search queries local fixtures. | **Dynamic tool calling**: Gemini decides autonomously which tools to call, inspects returned observation outputs, and requests additional data as needed. |
+| **Token Usage & Costs** | **Deterministic simulated usage**: Each turn reports fixed token counts (`450 input / 150 output`) to exercise the `CostCeilingMiddleware` and cost accumulation tracking. | **Live API token usage**: Real token counts reported by the Gemini API metadata are accumulated and checked against the $0.25 ceiling. |
+| **API Keys & Network** | **100% Offline**: Requires no external network calls, no API keys, and incurs $0.00 notional cost. | **Requires API Key**: Requires `GEMINI_API_KEY` with outbound internet access. |
+| **Security & Middleware** | **Identical**: Tool-call cap (15), cost ceiling ($0.25), SQL AST validator, read-only DB boundary, rate limiter, and approval gate apply identically in both modes. | **Identical**: Tool-call cap (15), cost ceiling ($0.25), SQL AST validator, read-only DB boundary, rate limiter, and approval gate apply identically in both modes. |
 
 In the dashboard:
 1. Verify the sidebar indicates `SCRIPTED DEMO: outputs are deterministic, not Gemini`.

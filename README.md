@@ -61,20 +61,46 @@
 Copy and paste the following commands to clone and run the application completely offline:
 
 ### Prerequisites
-- Python 3.13 (`>=3.13,<3.14`)
-- `uv` package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- Python 3.13 (`>=3.13,<3.14`). *Note: `uv` fetches and provisions Python 3.13 automatically if not already present on your machine.*
+- `uv` package manager:
+  - **Linux / macOS**: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - **Windows (PowerShell)**: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 ### Setup and Offline Execution
+
+**Bash (Linux / macOS / WSL2):**
 ```bash
 # 1. Clone repository
 git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
 cd marketing-campaign-agent
 
-# 2. Install dependencies with pinned lockfile
+# 2. Install dependencies with pinned lockfile (uv fetches Python 3.13 automatically)
 uv sync
 
 # 3. Create environment file from template
 cp .env.example .env
+
+# 4. Build synthetic customer database (seed 42, 2,000 customers)
+uv run python scripts/build_db.py
+
+# 5. Run end-to-end command line demo (scripted mode, no API key required)
+uv run python scripts/demo_run.py
+
+# 6. Launch Streamlit Human-in-the-Loop dashboard
+uv run streamlit run src/campaign/app.py
+```
+
+**PowerShell (Windows):**
+```powershell
+# 1. Clone repository
+git clone https://github.com/adwitiya-pandey/marketing-campaign-agent.git
+cd marketing-campaign-agent
+
+# 2. Install dependencies with pinned lockfile (uv fetches Python 3.13 automatically)
+uv sync
+
+# 3. Create environment file from template
+Copy-Item .env.example .env
 
 # 4. Build synthetic customer database (seed 42, 2,000 customers)
 uv run python scripts/build_db.py
@@ -99,10 +125,24 @@ In the dashboard:
 
 To run against the live Google Gemini API:
 
+**Bash (Linux / macOS / WSL2):**
 ```bash
 # Provide GEMINI_API_KEY as an environment variable or inside .env
 export GEMINI_API_KEY="your-gemini-api-key"
 export LLM_MODE="gemini"
+
+# Run end-to-end demo using Gemini 3.8 Flash
+uv run python scripts/demo_run.py
+
+# Or launch dashboard in live Gemini mode
+uv run streamlit run src/campaign/app.py
+```
+
+**PowerShell (Windows):**
+```powershell
+# Provide GEMINI_API_KEY as an environment variable or inside .env
+$env:GEMINI_API_KEY="your-gemini-api-key"
+$env:LLM_MODE="gemini"
 
 # Run end-to-end demo using Gemini 3.8 Flash
 uv run python scripts/demo_run.py
